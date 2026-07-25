@@ -1,0 +1,11 @@
+{
+  "name": "design-os",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Explore dozens of design directions from your coding agent. Local-first.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  }
+}
