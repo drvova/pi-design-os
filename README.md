@@ -3,20 +3,67 @@
 Explore dozens of design directions from your coding agent. Local-first.
 
 A local-first rebuild of [Rivet](https://tryrivet.design) — same shape, no server-side
-worker pool, no auth, no metering. Generation runs on the agent you already have.
+worker pool, no auth, no metering.
 
-Status: **empty repo.** Nothing is built. Four decisions below gate the first source file.
+Status: **direction engine and gallery work.** Project attachment, variant worktrees,
+and the MCP server are not built yet.
 
 ---
 
-## What this is
+## Usage
 
-An MCP server plus CLI that:
+```bash
+node bin/design-os.js directions --count 24 --seed monozukuri --open
+```
 
-1. attaches to your project's existing dev server,
-2. generates N design variants in parallel, each isolated,
-3. shows them side by side in a local editor,
-4. commits the one you pick back into your project.
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--count <n>` | `12` | directions to generate, 1-64 |
+| `--seed <text>` | random | identical seeds reproduce identical output |
+| `--polarity <p>` | `both` | `light`, `dark`, or `both` |
+| `--out <path>` | `.design-os/directions.html` | gallery destination |
+| `--open` | off | open the gallery in the browser |
+
+One JSON envelope goes to stdout; progress goes to stderr.
+
+```json
+{ "schemaVersion": 1, "ok": true, "command": "directions",
+  "data": { "count": 8, "seed": "showcase", "path": "…", "directions": [] } }
+```
+
+Exit codes: `0` ok, `1` operation failed, `2` usage error, `3` auth required,
+`4` server unavailable, `5` wait timeout (not a failure).
+
+## How the engine works
+
+Generation is deterministic and free. A seed drives a PRNG; hues are spread **evenly**
+around the wheel rather than sampled at random, which is what guarantees N directions
+look meaningfully different rather than accidentally similar. Every other axis — tone,
+shape, density, typeface, motion, polarity — is a seeded draw.
+
+Colour is OKLCH, not HSL. Equal lightness steps are perceptually equal and hue stays
+stable across the lightness range, so two directions at the same lightness carry the
+same visual weight regardless of hue. Chroma at each scale step is a percentage of that
+step's gamut maximum, so the ends of a ramp desaturate instead of clipping.
+
+A direction is nothing but a set of CSS custom properties. Custom properties inherit,
+so scoping them to a wrapper element isolates a preview with no iframe, no shadow root,
+and no `@scope`. One stylesheet drives every preview in the gallery.
+
+Copying reads the **authored** markup, never `innerHTML`. The DOM uncloses void elements
+and expands `checked` to `checked=""`; both forms are invalid JSX.
+
+```
+src/oklch.js       colour maths, gamut boundary, 9-step scales
+src/directions.js  seeded axis draws -> token sets
+src/components.js  the component set and its stylesheet
+src/jsx.js         HTML -> JSX attribute rewriting, shared with the page
+src/gallery.js     one self-contained HTML document
+src/envelope.js    wire contract and exit codes
+bin/design-os.js   CLI
+```
+
+Zero runtime dependencies. `npm test` runs 15 checks on stdlib `node:test`.
 
 ## Prior art — Rivet, verified 2026-07-25
 
@@ -31,30 +78,17 @@ Rivet, Inc. — npm [`rivet-design`](https://www.npmjs.com/package/rivet-design)
 | `rivet_variants` | `start` \| `complete` \| `commit` \| `cancel`. On `start`, the `briefs[]` array length sets the variant count. |
 | `rivet_design_context` | URL to design context. Pinterest / Are.na route to account data; any other URL is rendered and screenshotted. |
 
-### Its contract
-
-Every control-plane subcommand prints exactly one JSON envelope on stdout; human-readable
-progress goes to stderr. MCP tool results carry the same envelope verbatim.
-
-```json
-{ "schemaVersion": 1, "ok": true,  "command": "status", "data": {} }
-{ "schemaVersion": 1, "ok": false, "command": "variants.start",
-  "error": { "code": "AUTH_REQUIRED", "message": "Run `rivet login` first." } }
-```
-
-Exit codes: `0` ok, `1` operation failed, `2` usage error, `3` auth required,
-`4` server unavailable, `5` wait timeout (not a failure).
-
 ### Its architecture, read off its dependency list
 
-| Concern | Rivet |
-| --- | --- |
-| MCP | `@modelcontextprotocol/sdk`, stdio, `rivet mcp serve` |
-| Dev-server proxy | `express` + `http-proxy-middleware`; user app `:3000`, editor `:4000` |
-| Generation | server-side workers; `@anthropic-ai/claude-agent-sdk` present. Requires `rivet login` |
-| Variant isolation | `simple-git`, `--no-git` opt-out |
-| Queue | `redis` |
-| Telemetry | `posthog-node`, `@sentry/node`, `--no-telemetry` opt-out |
+| Concern | Rivet | design-os |
+| --- | --- | --- |
+| MCP | `@modelcontextprotocol/sdk`, stdio | same, planned |
+| Dev-server proxy | `express` + `http-proxy-middleware`, `:3000` to `:4000` | same, planned |
+| Generation | server-side workers behind `rivet login` | deterministic locally; agent SDK only for layout |
+| Variant isolation | `simple-git` branch per variant | `git worktree` per variant |
+| Queue | `redis` | in-process |
+| URL capture | own render service | `chrome-devtools-mcp` |
+| Telemetry | `posthog-node`, `@sentry/node` | none |
 
 Framework detection: Next.js, Vite, CRA, Remix, SvelteKit, Static HTML.
 Fidelity tiers `low | medium | high` — high is "frontier-model authorship, up to a few minutes".
@@ -65,45 +99,36 @@ Fidelity tiers `low | medium | high` — high is "frontier-model authorship, up 
 - **No MCP Apps.** Directions render in a browser tab on `localhost:4000`, not inline in the chat host.
 - **Not local.** Every variant is server-side inference behind a login.
 
-## Where this repo diverges
-
-| Rivet | design-os |
-| --- | --- |
-| Server-side worker pool, auth, billing | Local `@anthropic-ai/claude-agent-sdk` — no backend |
-| `redis` queue | In-process. One process, one project. |
-| `simple-git` branch per variant | `git worktree` per variant — N real dirs, N dev servers |
-| Own render service for URL capture | `chrome-devtools-mcp`, already installed |
-| Pinterest / Are.na OAuth | Local files plus URL capture |
-
-The CLI contract and the three-tool MCP surface are worth copying as-is.
-
 ## Protocol notes
 
 MCP Apps (`SEP-1865`, extension id `io.modelcontextprotocol/ui`) reached **stable `2026-01-26`**
 — UI resources under `ui://`, mime `text/html;profile=mcp-app`, sandboxed iframe, host-enforced
 CSP. Tools carrying `_meta.ui.visibility: ["app"]` are callable by the UI but hidden from the
-model's tool list. Terminal hosts cannot render it, so a browser editor stays the primary
-surface and MCP Apps is upside, not a dependency.
+model's tool list. Terminal hosts cannot render it, so a browser gallery stays the primary
+surface and MCP Apps is upside, not a dependency. The gallery is already a single
+self-contained HTML document, which is exactly the shape a `ui://` resource takes.
 
 React 19 scores **100%** on [Custom Elements Everywhere](https://custom-elements-everywhere.com/)
 (16/16 basic, 16/16 advanced, no open issues). Web components are no longer a tax in React.
 
-CSS `@scope` is Baseline newly-available since December 2025, ~88% global. Safari 17.4+.
+CSS `@scope` is Baseline newly-available since December 2025, ~88% global, Safari 17.4+.
+Unused here — custom-property inheritance already isolates previews with less code.
 
-## Open decisions
+## Decisions
 
-Nothing gets written until these close.
+1. **Isolation** — `git worktree` per variant. True parallel dev servers; cleanup is one command.
+2. **Editor** — native. No framework, no build step, no runtime dependency.
+3. **Granularity** — whole-page, with a CSS selector to scope a run to one element.
+4. **Generation** — deterministic token permutation for colour, type, spacing, radius and
+   motion. Model authorship is reserved for layout, where permutation cannot help.
 
-1. **Isolation** — `git worktree` per variant (true parallel dev servers, N × `node_modules`)
-   or in-place (one server, serial variants)?
-2. **Editor stack** — does "native, DOM APIs, manifests" describe the editor itself, or only
-   what it emits? These share zero files.
-3. **Variant granularity** — whole-page, or component-scoped via CSS selector as the primary axis?
-4. **Generation** — agent SDK per variant, or deterministic token permutation for color/type/
-   spacing/radius with the model reserved for layout? This decides whether the tool costs $0.
+Decision 4 is what makes a run instant and free where Rivet's is metered and takes minutes.
 
-Q4 is load-bearing. Deterministic permutation over a known token vocabulary renders instantly
-and free; model authorship is minutes and metered.
+## Next
+
+- `open` — framework detection, dev-server attach, proxy
+- `variants start|status|commit` over `git worktree`
+- `design-os mcp serve` — three tools over the same envelope
 
 ## Requirements
 

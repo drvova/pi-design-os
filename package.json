@@ -5,7 +5,18 @@
   "type": "module",
   "description": "Explore dozens of design directions from your coding agent. Local-first.",
   "license": "MIT",
+  "bin": {
+    "design-os": "bin/design-os.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "directions": "node bin/design-os.js directions"
+  },
   "engines": {
     "node": ">=22.13"
-  }
+  },
+  "files": [
+    "bin",
+    "src"
+  ]
 }
