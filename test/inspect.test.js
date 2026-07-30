@@ -150,6 +150,9 @@ test('a whole pipeline is read off one page load', async (t) => {
     assert.equal(report.capture.degraded, false);
     assert.equal(report.capture.failed, 0);
     assert.equal(report.capture.reason, null);
+    // Rated against the requests that could change what renders, not every one.
+    assert.ok(report.capture.renderAffecting > 0);
+    assert.equal(report.capture.renderAffectingFailed, 0);
 
     // 1 — what the parser was handed.
     assert.equal(report.preDom.hints[0].rel, 'preconnect');

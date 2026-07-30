@@ -355,9 +355,24 @@ export const HARVEST = `
       }
     })(body, 0);
   }
-  // Style elements this tool materialises into a clone are its own scaffolding.
-  // Counting them would make every clone look larger than what it copied.
-  total -= document.querySelectorAll('style[data-design-os]').length;
+  // Two kinds of element are discounted, both for the same reason: a copy is
+  // scored against this count, and neither side should be credited or charged
+  // for something the copy is not meant to reproduce.
+  //
+  // Style elements this tool materialises are its own scaffolding. Resource
+  // hints are stripped from a clone deliberately, since they would 404 against
+  // it — and a page can inject them by the hundred after load, which is how
+  // framer.com came out 106 elements short while every other measure matched.
+  var HINT_ONLY = { preconnect: 1, 'dns-prefetch': 1, preload: 1, modulepreload: 1, prefetch: 1, prerender: 1 };
+  var discounted = document.querySelectorAll('style[data-design-os]').length;
+  var relLinks = document.querySelectorAll('link[rel]');
+  for (var L = 0; L < relLinks.length; L += 1) {
+    var tokens = String(relLinks[L].getAttribute('rel') || '').toLowerCase().split(/\s+/).filter(Boolean);
+    var everyHint = tokens.length > 0;
+    for (var t = 0; t < tokens.length; t += 1) if (!HINT_ONLY[tokens[t]]) everyHint = false;
+    if (everyHint) discounted += 1;
+  }
+  total -= discounted;
   var all = body ? [document.documentElement, body].concat(descendants) : [];
   var sampled = 0;
   var viewport = Math.max(1, window.innerWidth * window.innerHeight);

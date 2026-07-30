@@ -45,6 +45,20 @@ const MAX_TOKENS = 400;
  */
 const DEGRADED_FAILURE_RATE = 0.1;
 
+/**
+ * Failures that can change what the page renders.
+ *
+ * Counting every failed request called healthy pages degraded. webflow.com
+ * loses twenty-one requests to ad and analytics endpoints that fail on any
+ * load and change nothing on screen; supabase.com loses twenty-six of its own
+ * scripts to opaque response blocking, and a snapshot disables scripts anyway.
+ * Both copied at full fidelity while the report warned they had not.
+ *
+ * A script counts only when scripts are being kept, because only then can its
+ * absence change the result.
+ */
+const RENDER_AFFECTING = new Set(['Document', 'Stylesheet', 'Font', 'Image', 'Media']);
+
 
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -460,8 +474,15 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
     const startedAfterDcl = assets.filter((asset) => !before(asset.startedAt)(domContentLoaded));
     const dynamicStyling = used(probe.styling);
     const staticDeclarations = sum(sheets, 'blocks');
+    const affectsRender = (asset) =>
+      RENDER_AFFECTING.has(asset.type) || (clone?.scripts === true && asset.type === 'Script');
+
     const failures = assets.filter((asset) => asset.failed);
-    const failureRate = assets.length > 0 ? failures.length / assets.length : 0;
+    const visual = assets.filter(affectsRender);
+    const visualFailures = failures.filter(affectsRender);
+    // Rated against the requests that could have mattered, not against every
+    // beacon the page fired.
+    const failureRate = visual.length > 0 ? visualFailures.length / visual.length : 0;
 
     return {
       url: target,
@@ -476,12 +497,15 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
       capture: {
         requests: assets.length,
         failed: failures.length,
+        // The subset that could have changed what the page looks like.
+        renderAffecting: visual.length,
+        renderAffectingFailed: visualFailures.length,
         failureRate: Number(failureRate.toFixed(3)),
         scriptsFailed: failures.filter((asset) => asset.type === 'Script').length,
         degraded: failureRate > DEGRADED_FAILURE_RATE,
         reason:
           failureRate > DEGRADED_FAILURE_RATE
-            ? `${failures.length} of ${assets.length} requests failed (${failures[0]?.failed}); treat every other section as describing a partly loaded page`
+            ? `${visualFailures.length} of ${visual.length} requests that affect rendering failed (${visualFailures[0]?.failed}); treat every other section as describing a partly loaded page`
             : null,
       },
 
