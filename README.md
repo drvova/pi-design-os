@@ -299,8 +299,11 @@ src/slices.js      slice detection, matched css, Feature-Sliced output
 src/extract.js     rendered page -> design direction
 src/commands.js    command implementations, shared by CLI and MCP
 src/mcp.js         MCP stdio server
+src/tools.js       the tool surface, declared once for both front ends
 src/envelope.js    wire contract and exit codes
 bin/design-os.js   CLI
+extensions/        the Pi extension, loaded in-process
+skills/            when the agent should reach for each tool
 ```
 
 Zero runtime dependencies. Node 22 ships a global `WebSocket`, so driving Chrome needs no
@@ -308,11 +311,41 @@ Puppeteer and no Playwright; `npm test` runs 37 checks on stdlib `node:test`, in
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
 exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back
 through the served copy, and a Feature-Sliced run asserting that a slice carries the rules
-that matched it and none that did not. Total: 42 checks.
+that matched it and none that did not. Total: 48 checks, including one that asserts the native and MCP surfaces are the same
+object rather than two copies of it.
+
+## Pi
+
+design-os is a Pi package. `package.json` points Pi at an extension and a skill:
+
+```json
+"pi": {
+  "extensions": ["./extensions/design-os.js"],
+  "skills": ["./skills"]
+}
+```
+
+Pi loads the extension in its own process and calls each tool directly, so there
+is no subprocess, no JSON-RPC frame and no stdio contract between the agent and
+the work. That removes the one hazard the MCP transport must guard against: a
+command writing to stdout cannot corrupt a message stream when there is no
+message stream. Failure is reported by throwing, which is Pi's contract, with the
+envelope's wire code kept in the message because that is the part a caller can
+act on.
+
+```bash
+npm install -g design-os      # or: pi install design-os
+```
+
+The skill in `skills/design-os` tells the agent when to reach for each tool, and
+which fields to read first — `capture.degraded` before any conclusion drawn from
+a report, and `meta.json.namedBy` before repeating an inferred slice name as
+fact.
 
 ## MCP
 
-`design-os mcp` speaks line-delimited JSON-RPC 2.0 on stdio, protocol `2025-06-18`.
+For agents that are not Pi, `design-os mcp` speaks line-delimited JSON-RPC 2.0 on
+stdio, protocol `2025-06-18`.
 
 | Tool | Purpose |
 | --- | --- |
@@ -320,8 +353,10 @@ that matched it and none that did not. Total: 42 checks.
 | `design_clone` | Copy a url, or crawl a site, then load every route back and score it. `layout: "fsd"` emits a Feature-Sliced tree with components extracted. |
 | `design_directions` | Generate deterministic directions and write a gallery. |
 
-Both call `src/commands.js`, the same entry point the CLI uses, so a tool call and a shell
-invocation cannot drift apart. Each result carries the CLI's envelope verbatim. The spec
+Both front ends read one declaration in `src/tools.js` and run `src/commands.js`, the same
+entry point the CLI uses, so a tool call, a native call and a shell invocation cannot drift
+apart: a schema written twice would let an agent see a different tool depending on how it
+reached the same code. Each result carries the CLI's envelope verbatim. The spec
 requires that stdout carry MCP messages and nothing else, which is why the server never
 calls `emit`; commands already send progress to stderr, so the message stream is safe by
 construction. Work that fails comes back as a result with `isError` carrying the failure

@@ -19,6 +19,24 @@
   },
   "files": [
     "bin",
-    "src"
-  ]
+    "src",
+    "extensions",
+    "skills"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "design",
+    "clone",
+    "chrome-devtools-protocol",
+    "feature-sliced-design"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/design-os.js"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  }
 }
