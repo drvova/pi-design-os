@@ -363,16 +363,13 @@ export const HARVEST = `
   // hints are stripped from a clone deliberately, since they would 404 against
   // it — and a page can inject them by the hundred after load, which is how
   // framer.com came out 106 elements short while every other measure matched.
-  var HINT_ONLY = { preconnect: 1, 'dns-prefetch': 1, preload: 1, modulepreload: 1, prefetch: 1, prerender: 1 };
-  var discounted = document.querySelectorAll('style[data-design-os]').length;
-  var relLinks = document.querySelectorAll('link[rel]');
-  for (var L = 0; L < relLinks.length; L += 1) {
-    var tokens = String(relLinks[L].getAttribute('rel') || '').toLowerCase().split(/\s+/).filter(Boolean);
-    var everyHint = tokens.length > 0;
-    for (var t = 0; t < tokens.length; t += 1) if (!HINT_ONLY[tokens[t]]) everyHint = false;
-    if (everyHint) discounted += 1;
-  }
-  total -= discounted;
+  // A link element renders nothing, and a page can inject dozens into its body
+  // while it runs: notion.com adds eighteen, which a copy with its scripts off
+  // can never have. Counting them measures loading metadata rather than
+  // structure, so none of them count on either side. Style elements this tool
+  // materialises are discounted for the same reason — neither side should be
+  // charged for something the copy is not meant to reproduce.
+  total -= document.querySelectorAll('style[data-design-os]').length + document.body.querySelectorAll('link').length;
   var all = body ? [document.documentElement, body].concat(descendants) : [];
   var sampled = 0;
   var viewport = Math.max(1, window.innerWidth * window.innerHeight);

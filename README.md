@@ -381,6 +381,11 @@ that had nothing to do with Next.
 | `astro.build` | Astro islands, Tailwind | 2 | 100% | 23 |
 | `vuejs.org` | Vue, VitePress | 2 | 100% | 69 |
 | `htmx.org` | HTMX, no build step | 2 | 100% | 49 |
+
+Seven of those eight now score **exactly 1.0 on every check**. `stripe.com` sits at
+0.997 on `grids` and `flexes`, which are counts of computed `display` values and
+the last thing still moving between two readings of a page that animates as it
+loads.
 | `svelte.dev` | SvelteKit | 2 | 100% | 53 |
 
 Eight stacks, every one at 100%, each under 40 seconds with `--layout fsd`.
@@ -393,6 +398,20 @@ being the more complete of the two — stripe.com came out at 65% on element cou
 while its own two consecutive loads agreed to the element. The design is
 therefore read a second time after the walk, purely for scoring; every number in
 the pipeline report still comes from the reading taken before it.
+
+Three further asymmetries had to go before the scores settled, all of the same
+shape: the two sides were being measured differently and the copy was charged for
+it.
+
+- **The second reading is the last thing before serialization.** Taken any
+  earlier it describes a smaller page than the one written, because a site keeps
+  mounting while slices are detected and matched.
+- **The copy is walked too.** Verification used to load it and read it without
+  the walk, scoring a pre-walk reading against a post-walk one.
+- **Link elements are not structure.** A page can inject dozens into its body
+  while it runs — notion.com adds eighteen — and a copy with its scripts disabled
+  can never have them. A `link` renders nothing, so counting one measures loading
+  metadata rather than structure, and none of them count on either side.
 
 ### What a clone is not
 

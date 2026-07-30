@@ -296,10 +296,18 @@ function collect(session) {
  * Loads a url once and reports the whole pipeline.
  *
  * @param {{url:string, wait?:number, timeout?:number, screenshot?:boolean,
+ *   reveal?:boolean,
  *   clone?:{dir:string, holder?:string, saved?:Map, layout?:string, scripts?:boolean,
  *     maxBytes?:number, slices?:{ledger:Map, routeMarker:string}}}} options
  */
-export async function inspectPage({ url, wait = 15000, timeout = 30000, screenshot = false, clone = null }) {
+export async function inspectPage({
+  url,
+  wait = 15000,
+  timeout = 30000,
+  screenshot = false,
+  clone = null,
+  reveal = false,
+}) {
   const target = normaliseUrl(url);
   const session = await openPage({ timeout });
 
@@ -399,21 +407,30 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
     // before this ran, so the pipeline report still describes the page's own
     // behaviour rather than the tool's.
     let revealed = null;
-    if (clone) {
+    if (clone || reveal) {
       const walked = await session
         .send('Runtime.evaluate', { expression: REVEAL, returnByValue: true, awaitPromise: true })
         .catch((error) => ({ exceptionDetails: { text: error.message } }));
       revealed = walked.exceptionDetails ? { failed: walked.exceptionDetails.text } : walked.result.value;
     }
 
-    // The design is read a second time once the page has been walked.
+    // Detection marks the nodes and the CSS domain answers about them, so both
+    // must happen while the document is still live and before it is serialized.
+    const detected = clone?.slices ? await collectSlices(session) : null;
+
+    // The design is read a second time, as late as it can be.
     //
-    // Everything reported above was measured before the walk, which is right for
-    // a pipeline report and wrong for a comparison: the copy is taken after the
-    // walk, so it holds the lazy content the first reading never saw. Scoring one
-    // against the other marks the copy down for being the more complete of the
-    // two — stripe.com came out at 65% on element count while its own two loads
-    // agree exactly.
+    // Everything reported above was measured before the walk, which is right for a
+    // pipeline report and wrong for a comparison: the copy is taken after the walk,
+    // so it holds the lazy content the first reading never saw. Scoring one against
+    // the other marks the copy down for being the more complete of the two —
+    // stripe.com came out at 65% on element count while its own two loads agree
+    // exactly.
+    //
+    // It also has to be the *last* reading before serialization. Taken any earlier
+    // it describes a smaller page than the one written: notion.com mounts content
+    // while slices are being detected and matched, and the replica came back 48
+    // elements ahead of the reading it was being scored against.
     let comparable = null;
     if (revealed && !revealed.failed) {
       const after = await session.send('Runtime.evaluate', { expression: HARVEST, returnByValue: true });
@@ -425,10 +442,6 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
         };
       }
     }
-
-    // Detection marks the nodes and the CSS domain answers about them, so both
-    // must happen while the document is still live and before it is serialized.
-    const detected = clone?.slices ? await collectSlices(session) : null;
 
     const cloned = clone
       ? await captureClone(session, {

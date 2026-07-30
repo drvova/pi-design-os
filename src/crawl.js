@@ -187,10 +187,14 @@ export async function cloneSite({
     try {
       for (const summary of summaries) {
         progress(`Verifying ${summary.path}…`);
+        // Walked and read the same way the original was. Without this the copy
+        // is scored on its pre-walk reading against the original's post-walk
+        // one, so the two sides describe different amounts of the same page.
         const replica = await inspectPage({
           url: new URL(summary.path, server.url).href,
           wait: Math.min(wait, 8000),
           timeout,
+          reveal: true,
         });
         const scored = compareDesign(captured.get(summary.url).report, replica);
         summary.fidelity = { ...scored, replica: replica.capture };
