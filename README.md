@@ -264,6 +264,19 @@ held back, because a universal selector matches every node and Tailwind's
 preflight would otherwise be copied under all seventy-odd components with no
 single home.
 
+A rule written for a state the page is not in is still that component's rule. A
+menu styled through `[aria-expanded="true"]` matches nothing while it is closed,
+so those rules never reached it — `lawsofux.com` styles its toggle icons that way
+and lost four of them. Interactive state attributes are therefore removed before
+matching, the same way `:hover` already was, which brings 30 state selectors into
+that site's ten slice stylesheets.
+
+Only attributes that express a toggle: `aria-expanded`, `aria-selected`,
+`aria-checked`, `aria-pressed`, `aria-current`, `data-state` and its neighbours,
+and a bare `open`. `aria-hidden` and `aria-disabled` are deliberately left in
+place, because widening those selectors reaches content the component does not
+own and would attribute rules to slices with nothing to do with them.
+
 Asking the CSS domain per node is equally exact and costs a round trip each,
 which measured 80ms on `tailwindcss.com`: fifty slices of a few hundred nodes is
 twenty thousand calls and twenty-six minutes of waiting that is indistinguishable
@@ -540,7 +553,7 @@ Puppeteer and no Playwright; `npm test` runs 63 checks on stdlib `node:test`, in
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
 exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back
 through the served copy, and a Feature-Sliced run asserting that a slice carries the rules
-that matched it and none that did not. Total: 65 checks, including one that asserts the native and MCP surfaces are the same
+that matched it and none that did not. Total: 66 checks, including one that asserts the native and MCP surfaces are the same
 object rather than two copies of it, one that asserts a degraded capture is drawn above the
 verdict it invalidates, and one that asserts the two front ends never offer the same tool
 twice. The extension takes its config paths as an argument, so what a machine happens to

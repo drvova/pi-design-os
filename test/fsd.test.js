@@ -163,3 +163,81 @@ test('a slice carries only the css that matched it', async (t) => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('a rule for an interactive state still belongs to its component', async (t) => {
+  try {
+    chromePath();
+  } catch {
+    t.skip('no Chrome or Chromium on this machine');
+    return;
+  }
+
+  const { createServer } = await import('node:http');
+  const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { inspectPage } = await import('../src/inspect.js');
+
+  // Every rule below is written for a state the page is not in. The open ones
+  // belong to the menu regardless; the aria-hidden one must not drag unrelated
+  // content into it, and the reset must stay in the app layer.
+  const css = [
+    '*,::before,::after{box-sizing:border-box}',
+    'body{margin:0;background:#101018;color:#eee;font-family:sans-serif}',
+    '.menu{border-radius:12px;padding:8px}',
+    '.menu[aria-expanded="true"]{box-shadow:0 8px 24px #0008}',
+    '.menu[aria-expanded="true"] .panel{display:grid;gap:6px}',
+    '.menu[data-state="open"] .chevron{rotate:180deg}',
+    '.menu:not([aria-expanded="true"]) .panel{display:none}',
+    '[aria-hidden="true"] .elsewhere{outline:3px solid red}',
+    '.elsewhere{padding:4px}',
+  ].join('');
+
+  const page = `<!doctype html><html lang="en"><head><meta charset="utf-8"><style>${css}</style></head><body>
+    <header><h1>State</h1></header>
+    <nav class="menu" aria-expanded="false" data-state="closed" aria-label="Primary">
+      <button type="button">Open</button><span class="chevron">v</span>
+      <div class="panel"><a href="/a">a</a><a href="/b">b</a></div>
+    </nav>
+    <section><p class="elsewhere">not part of the menu</p></section>
+    </body></html>`;
+
+  const origin = createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end(page);
+  });
+  await new Promise((ready) => origin.listen(0, '127.0.0.1', ready));
+  const dir = await mkdtemp(join(tmpdir(), 'design-os-state-'));
+
+  try {
+    const report = await inspectPage({
+      url: `http://127.0.0.1:${origin.address().port}/`,
+      wait: 4000,
+      clone: { dir, slices: { ledger: new Map(), routeMarker: 'index.html' }, layout: 'fsd' },
+    });
+
+    const menu = report.clone.slices && (await readFile(join(dir, 'widgets', 'primary-nav', 'ui', 'styles.css'), 'utf8').catch(() => null));
+    assert.ok(menu, `no primary-nav slice written; got ${JSON.stringify(report.clone.slices)}`);
+
+    // The states the page is not in, captured because they are still its rules.
+    assert.match(menu, /aria-expanded="true"\]\s*\{/, 'the open rule must reach the component');
+    assert.match(menu, /box-shadow/);
+    assert.match(menu, /data-state="open"\]/, 'a data-state rule counts too');
+    assert.match(menu, /rotate/);
+    // Its own base rule, and the negated form that already matched.
+    assert.match(menu, /\.menu\s*\{/);
+
+    // Stripping aria-hidden would widen that selector to content the menu does
+    // not own, so it is deliberately left in place.
+    assert.doesNotMatch(menu, /outline/, 'aria-hidden must not pull in unrelated content');
+
+    // And the regression that adding a fallback caused: a universal reset whose
+    // stripped form no longer parses must not be retried against every element.
+    // (Where the reset does land is covered by the app-styles test above, which
+    // goes through cloneSite; inspectPage alone does not write the app layer.)
+    assert.doesNotMatch(menu, /box-sizing/, 'the reset belongs to the app layer');
+  } finally {
+    origin.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

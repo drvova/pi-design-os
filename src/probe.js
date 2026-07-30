@@ -1152,9 +1152,24 @@ export const MATCH_SLICES = `
   // stripped for the purpose of finding the rule's targets.
   var DYNAMIC = /::?(?:before|after|placeholder|selection|backdrop|marker|first-line|first-letter|file-selector-button|-webkit-[a-z-]+)|:(?:hover|focus|focus-visible|focus-within|active|visited|target|any-link|autofill)\\b/g;
 
+  // An interactive state is the same problem as :hover. A rule written for a menu
+  // that is open matches nothing while it is closed, even though it is plainly
+  // part of that menu: lawsofux.com styles its toggle icons through
+  // [aria-expanded="true"], and those four rules never reached the component.
+  //
+  // Only attributes that express a toggle are removed. aria-hidden and
+  // aria-disabled are deliberately left in place — stripping those widens a
+  // selector to content the component does not own, which would attribute rules
+  // to slices they have nothing to do with.
+  var STATE = /\\[(?:aria-(?:expanded|selected|checked|pressed|current)|data-(?:state|open|active|selected|expanded|highlighted)|open)(?:[~^$*|]?=(?:"[^"]*"|'[^']*'|[^\\]]*))?\\]/gi;
+
   function targetable(selector) {
-    var stripped = selector.replace(DYNAMIC, '').replace(/\\s*[>+~]\\s*$/, '').trim();
+    var stripped = selector.replace(DYNAMIC, '').replace(STATE, '').replace(/\\s*[>+~]\\s*$/, '').trim();
     return stripped === '' ? null : stripped;
+  }
+
+  function query(selector) {
+    try { return document.querySelectorAll(selector); } catch (error) { return null; }
   }
 
   var flat = [];
@@ -1195,7 +1210,14 @@ export const MATCH_SLICES = `
     // matches: a universal selector matches every node on the page.
     var parts = rule.selector.split(',').map(function (p) { return p.trim(); });
     var documentScoped = parts.every(function (p) {
-      return /^(\\*|html|body|:root|:where\\(html\\)|:where\\(body\\))$/.test(p.replace(DYNAMIC, '').trim());
+      var bare = p.replace(DYNAMIC, '').trim();
+      // A part that is nothing but a pseudo-element addresses every element's
+      // pseudo-element, which is the document's business: a universal selector
+      // beside two bare pseudo-elements is a reset, and treating the empty
+      // remainder as unrecognised let that rule through to every slice.
+      // Backticks are avoided here: this source is itself a template literal.
+      if (bare === '') return true;
+      return /^(\\*|html|body|:root|:where\\(html\\)|:where\\(body\\))$/.test(bare);
     });
     if (documentScoped) {
       if (!seen.__shell__) seen.__shell__ = Object.create(null);
@@ -1206,8 +1228,12 @@ export const MATCH_SLICES = `
     var lookup = targetable(rule.selector);
     if (!lookup) continue;
 
-    var matched;
-    try { matched = document.querySelectorAll(lookup); } catch (error) { continue; }
+    // Removing a state can leave a selector that no longer parses — inside
+    // :not(), for one — and the original still matches whatever it matches
+    // today, so it is worth trying before giving up on the rule.
+    var matched = query(lookup);
+    if (matched === null) matched = query(rule.selector);
+    if (matched === null) continue;
 
     for (var m = 0; m < matched.length; m += 1) {
       // Every enclosing slice, not just the nearest one.
