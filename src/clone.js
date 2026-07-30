@@ -101,6 +101,22 @@ function localPath(rawUrl, mimeType) {
 }
 
 /**
+ * Local html file for a route.
+ *
+ * Directory form, so `/docs` and `/docs/install` cannot collide on one path and
+ * a link to either resolves the same way served or opened from disk.
+ */
+export function routePath(rawUrl) {
+  const url = new URL(rawUrl);
+  const parts = url.pathname.split('/').filter((part) => part && part !== '.' && part !== '..').map(segment);
+  if (parts.length === 0) return 'index.html';
+  if (url.search) parts.push(short(url.search));
+  // A path that already names a document is used as written.
+  if (/\.x?html?$/i.test(parts.at(-1))) return posix.join(...parts);
+  return posix.join(...parts, 'index.html');
+}
+
+/**
  * Every spelling of one url that could appear inside a file served from
  * `holderOrigin`.
  *
@@ -115,15 +131,50 @@ function spellings(rawUrl, holderOrigin) {
   return found;
 }
 
-/** Rewrites every known url in `text` to a path relative to the file holding it. */
-function localise(text, holder, holderOrigin, replacements) {
-  let rewritten = text;
+const escape = (literal) => literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Characters that can legally end a url reference.
+ *
+ * A reference is a delimited token, not a substring, and treating it as one is
+ * what makes `/docs` stop short of `/docs/installation`. A fragment or a query
+ * may follow, because both address the same document and both survive the
+ * rewrite; a path separator may not, because it names a different one.
+ */
+const REFERENCE_END = '(?=[\'"\\s)>,;#?]|$)';
+
+/**
+ * Rewrites every known url in `text` to a path relative to the file holding it.
+ *
+ * Two rules, and both are needed.
+ *
+ * A match must end at a delimiter. Without that, the entry url is a prefix of
+ * every absolute url on its own site, so `https://x.com/` rewrites the front of
+ * `https://x.com/plus` and leaves `./index.htmlplus`. The same happens to any
+ * route that prefixes an uncloned one: `/docs` sits inside `/docs/installation`
+ * and there is no longer alternative to prefer, because that page was never
+ * cloned.
+ *
+ * And it must be one pass. Replacing in sequence is unsafe in both directions:
+ * the short url first splices its path into the middle of the long one, and the
+ * long url first leaves `./docs/install/index.html`, which the short url then
+ * matches inside the result just written. A single alternation, longest branch
+ * first, visits each character once and never revisits a substitution.
+ */
+export function localise(text, holder, holderOrigin, replacements) {
+  const targets = new Map();
+
   for (const { url, path } of replacements) {
     let target = posix.relative(posix.dirname(holder), path);
     if (!target.startsWith('.')) target = `./${target}`;
-    for (const form of spellings(url, holderOrigin)) rewritten = rewritten.replaceAll(form, target);
+    for (const form of spellings(url, holderOrigin)) if (!targets.has(form)) targets.set(form, target);
   }
-  return rewritten;
+  if (targets.size === 0) return text;
+
+  // Alternation is tried left to right, so longest first means longest wins.
+  const ordered = [...targets.keys()].sort((a, b) => b.length - a.length);
+  const pattern = new RegExp(`(?:${ordered.map(escape).join('|')})${REFERENCE_END}`, 'g');
+  return text.replace(pattern, (matched) => targets.get(matched));
 }
 
 /**
@@ -133,7 +184,15 @@ function localise(text, holder, holderOrigin, replacements) {
  * @param {object} options
  * @returns {Promise<object>} manifest describing what was written and what was not
  */
-export async function captureClone(session, { assets, pageUrl, outDir, keepScripts = false, maxBytes = 40 * 1024 * 1024 }) {
+export async function captureClone(session, {
+  assets,
+  pageUrl,
+  outDir,
+  holder = 'index.html',
+  saved = new Map(),
+  keepScripts = false,
+  maxBytes = 40 * 1024 * 1024,
+}) {
   const snapshot = await session.send('Runtime.evaluate', { expression: SNAPSHOT, returnByValue: true });
   if (snapshot.exceptionDetails) {
     throw new Error(`snapshot failed: ${snapshot.exceptionDetails.text}`);
@@ -157,8 +216,19 @@ export async function captureClone(session, { assets, pageUrl, outDir, keepScrip
   const replacements = [];
   const textual = [];
   let bytes = 0;
+  let reused = 0;
 
   for (const asset of savable) {
+    // Routes of one site share almost every asset. A url already written keeps
+    // its path, so the reference still rewrites, but the body is not fetched
+    // again: each route runs in a fresh browser with a cold cache.
+    const already = saved.get(asset.url);
+    if (already) {
+      replacements.push({ url: asset.url, path: already });
+      reused += 1;
+      continue;
+    }
+
     if (bytes >= maxBytes) {
       skipped.push({ url: asset.url, reason: 'size budget exhausted' });
       continue;
@@ -182,6 +252,7 @@ export async function captureClone(session, { assets, pageUrl, outDir, keepScrip
     bytes += content.length;
 
     replacements.push({ url: asset.url, path });
+    saved.set(asset.url, path);
     // Text is rewritten only once the map is complete: a sheet can reference a
     // font that has not been walked yet.
     if (TEXTUAL.has(asset.type)) {
@@ -199,7 +270,7 @@ export async function captureClone(session, { assets, pageUrl, outDir, keepScrip
     });
   }
 
-  let document = localise(html, 'index.html', pageOrigin, replacements);
+  let document = localise(html, holder, pageOrigin, replacements);
   // A <base> would send every relative path back to the original origin.
   document = document.replace(/<base\b[^>]*>/gi, '');
   // Hints only describe loading. Kept, they 404 locally and pollute a re-inspection.
@@ -241,16 +312,20 @@ export async function captureClone(session, { assets, pageUrl, outDir, keepScrip
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, file.content);
   }
-  await writeFile(join(outDir, 'index.html'), document, 'utf8');
+  const entry = join(outDir, ...holder.split('/'));
+  await mkdir(dirname(entry), { recursive: true });
+  await writeFile(entry, document, 'utf8');
 
   const byType = {};
   for (const file of written) byType[file.type] = (byType[file.type] ?? 0) + 1;
 
   return {
     dir: outDir,
-    entry: join(outDir, 'index.html'),
+    entry,
+    holder,
     files: written.length + 1,
     bytes,
+    reused,
     byType,
     documentBytes: document.length,
     scripts: keepScripts ? 'kept' : 'disabled',

@@ -70,17 +70,27 @@ const TOOLS = [
     name: 'design_clone',
     title: 'Clone a site into a runnable local copy',
     description:
-      'Loads a url once and writes a runnable local copy: the rendered DOM after hydration, every stylesheet, ' +
+      'Loads a url and writes a runnable local copy: the rendered DOM after hydration, every stylesheet, ' +
       'font, image and script it fetched, and all references rewritten to the local files. CSS held only in the ' +
       'CSSOM — everything a CSS-in-JS library injected at runtime — is written back into the markup first, so a ' +
       'styled-components or Emotion site clones with its styling intact. Scripts are saved but disabled by ' +
       'default, making the copy a faithful static rebuild. The clone is then loaded back and scored against the ' +
-      'original on palette, type, spacing and layout. Returns the same pipeline report design_inspect does.',
+      'original on palette, type, spacing and layout. Set routes above 1 to crawl the site breadth-first from ' +
+      'the url, following same-origin links found in the rendered DOM; every route shares one asset ledger and ' +
+      'the links between them are rewritten to point at the local files. Returns the same pipeline report ' +
+      'design_inspect does, for the entry route, plus a per-route manifest.',
     inputSchema: {
       type: 'object',
       properties: {
         url: { type: 'string', description: 'Site to clone. A bare hostname is treated as https.' },
         out: { type: 'string', description: 'Output directory. Defaults to .design-os/clone-<host>.' },
+        routes: {
+          type: 'integer',
+          description: 'How many routes to crawl breadth-first from the url. 1 clones only the page given.',
+          minimum: 1,
+          maximum: 200,
+          default: 1,
+        },
         budget: {
           type: 'integer',
           description: 'Asset size budget in MB. Stylesheets and fonts are saved first, scripts last.',

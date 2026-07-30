@@ -25,7 +25,7 @@ Usage:
 Commands:
   directions        generate deterministic design directions and a gallery
   inspect           load a url once and report its rendering pipeline and design
-  clone             write a runnable local copy of a url, then verify it
+  clone             copy a url, or crawl a site, then load it back and score it
   mcp               serve the three tools over MCP stdio
 
 directions options:
@@ -40,6 +40,7 @@ inspect and clone options:
   --gallery         render the extracted direction as HTML    (inspect)
 
 clone options:
+  --routes <n>      routes to crawl breadth-first from the url    (default 1)
   --budget <mb>     asset size budget, lowest priority cut first  (default 40)
   --scripts         keep the page's scripts wired up instead of disabling them
   --skip-verify     do not load the clone back and score it
@@ -60,6 +61,7 @@ const OPTIONS = {
   wait: { type: 'string' },
   timeout: { type: 'string' },
   budget: { type: 'string' },
+  routes: { type: 'string' },
   screenshot: { type: 'boolean', default: false },
   gallery: { type: 'boolean', default: false },
   scripts: { type: 'boolean', default: false },

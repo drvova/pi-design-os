@@ -451,6 +451,20 @@ export const HARVEST = `
   for (var s = 0; s < signals.length; s += 1) if (signals[s][1]) stack.push(signals[s][0]);
 
   // Authored assets, still in source order.
+  // Same-origin destinations, read after hydration so client-rendered links
+  // count. The hash is dropped: one document serves every fragment of itself.
+  var links = [];
+  var seenLinks = Object.create(null);
+  var anchors = document.querySelectorAll('a[href]');
+  for (var n = 0; n < anchors.length && links.length < 500; n += 1) {
+    var href = anchors[n].href;
+    if (!href || href.lastIndexOf(location.origin, 0) !== 0) continue;
+    var clean = href.split('#')[0];
+    if (!clean || seenLinks[clean]) continue;
+    seenLinks[clean] = 1;
+    links.push(clean);
+  }
+
   var sheets = Array.prototype.map.call(document.querySelectorAll('link[rel~="stylesheet"]'), function (link) {
     return { href: link.href, media: link.media || 'all', disabled: link.disabled };
   });
@@ -504,6 +518,7 @@ export const HARVEST = `
       keyframeAnimated: animated
     },
     assets: { stylesheets: sheets, scripts: scripts },
+    links: links,
     document: {
       title: document.title,
       lang: document.documentElement.lang || null,

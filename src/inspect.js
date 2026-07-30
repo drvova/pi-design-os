@@ -280,7 +280,7 @@ function collect(session) {
  * Loads a url once and reports the whole pipeline.
  *
  * @param {{url:string, wait?:number, timeout?:number, screenshot?:boolean,
- *   clone?:{dir:string, scripts?:boolean, maxBytes?:number}}} options
+ *   clone?:{dir:string, holder?:string, saved?:Map, scripts?:boolean, maxBytes?:number}}} options
  */
 export async function inspectPage({ url, wait = 15000, timeout = 30000, screenshot = false, clone = null }) {
   const target = normaliseUrl(url);
@@ -381,6 +381,8 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
           assets,
           pageUrl: harvest.document.url,
           outDir: clone.dir,
+          holder: clone.holder,
+          saved: clone.saved,
           keepScripts: clone.scripts,
           maxBytes: clone.maxBytes,
         })
@@ -567,6 +569,7 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
       },
 
       stack: harvest.stack,
+      links: harvest.links,
       clone: cloned && { ...cloned, attachShadowCalls: probe.apis.attachShadow?.total ?? 0 },
       direction: toDirection(harvest.design, { url: harvest.document.url, title: harvest.document.title }),
       screenshot: shot,

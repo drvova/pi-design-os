@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
-import { compareDesign, serveDirectory } from './clone.js';
+import { cloneSite } from './crawl.js';
 import { generate } from './directions.js';
 import { ok, progress, usage } from './envelope.js';
 import { render } from './gallery.js';
@@ -141,9 +141,9 @@ export async function inspect(options = {}) {
 /**
  * Writes a runnable local copy of a url and checks that it holds up.
  *
- * Verification re-runs the identical analysis against the clone served over
- * http and scores the two designs against each other. A clone nobody loaded is
- * a claim; skipping the check is possible but it is not the default.
+ * Verification re-runs the identical analysis against each cloned route served
+ * over http and scores the two designs against each other. A clone nobody
+ * loaded is a claim; skipping the check is possible but it is not the default.
  */
 export async function clone(options = {}) {
   if (!options.url) throw usage('clone needs a url, e.g. design-os clone stripe.com');
@@ -151,41 +151,44 @@ export async function clone(options = {}) {
   const wait = integer(options.wait, { name: 'wait', min: 500, max: 120000, fallback: 15000 });
   const timeout = integer(options.timeout, { name: 'timeout', min: 5000, max: 180000, fallback: 30000 });
   const budget = integer(options.budget, { name: 'budget', min: 1, max: 2048, fallback: 40 });
+  const routes = integer(options.routes, { name: 'routes', min: 1, max: 200, fallback: 1 });
   const target = normaliseUrl(options.url);
   const dir = resolve(options.out ?? `${WORKSPACE}/clone-${slug(target)}`);
 
   progress(`Cloning ${target} into ${dir}…`);
-  const report = await inspectPage({
+  const site = await cloneSite({
     url: target,
+    dir,
+    routes,
     wait,
     timeout,
+    scripts: Boolean(options.scripts),
+    maxBytes: budget * 1024 * 1024,
     screenshot: Boolean(options.screenshot),
-    clone: { dir, scripts: Boolean(options.scripts), maxBytes: budget * 1024 * 1024 },
+    verify: !options.skipVerify,
   });
-  progress(`Wrote ${report.clone.files} files, ${Math.round(report.clone.bytes / 1024)}KB`);
 
-  let fidelity = null;
-  if (!options.skipVerify) {
-    const server = await serveDirectory(dir);
-    progress(`Verifying the clone at ${server.url}…`);
-    try {
-      const replica = await inspectPage({ url: server.url, wait: Math.min(wait, 8000), timeout });
-      fidelity = { ...compareDesign(report, replica), capture: replica.capture };
-      progress(`Fidelity ${Math.round(fidelity.score * 100)}%`);
-    } finally {
-      await server.close();
-    }
-  }
+  const { entryReport: report, ...manifest } = site;
+  progress(
+    `Cloned ${site.cloned} of ${site.discovered} discovered routes, ` +
+      `${site.assets.unique} unique assets, ${Math.round(site.assets.bytes / 1024)}KB`,
+  );
+  if (site.fidelity) progress(`Fidelity ${Math.round(site.fidelity.score * 100)}% (lowest ${Math.round(site.fidelity.lowest * 100)}%)`);
 
   const stem = `${WORKSPACE}/${slug(report.finalUrl)}`;
-  const artefacts = { clone: dir, entry: report.clone.entry };
-  artefacts.report = await write(resolve(`${stem}.clone.json`), JSON.stringify({ ...report, fidelity }, null, 2));
+  const artefacts = { clone: dir, entry: site.entry };
+  artefacts.report = await write(resolve(`${stem}.clone.json`), JSON.stringify({ ...report, site: manifest }, null, 2));
   if (options.screenshot && report.screenshot) {
     artefacts.screenshot = await write(resolve(`${stem}.png`), Buffer.from(report.screenshot, 'base64'));
   }
-  if (options.open) openInBrowser(report.clone.entry);
+  if (options.open) openInBrowser(site.entry);
 
-  return ok('clone', { ...bounded(report, artefacts.report), fidelity, artefacts });
+  return ok('clone', {
+    ...bounded(report, artefacts.report),
+    site: manifest,
+    fidelity: site.fidelity,
+    artefacts,
+  });
 }
 
 /** Every command the CLI and the MCP server expose. */

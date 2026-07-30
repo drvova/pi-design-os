@@ -15,7 +15,7 @@ attachment and variant worktrees are not built yet.
 ```bash
 node bin/design-os.js directions --count 24 --seed monozukuri --open
 node bin/design-os.js inspect stripe.com --screenshot --gallery --open
-node bin/design-os.js clone linear.app
+node bin/design-os.js clone linear.app --routes 5
 node bin/design-os.js mcp
 ```
 
@@ -28,6 +28,7 @@ node bin/design-os.js mcp
 | `--timeout <ms>` | `30000` | per-operation Chrome timeout |
 | `--screenshot` | off | also write a PNG of the loaded page |
 | `--gallery` | off | render the extracted direction as HTML |
+| `--routes <n>` | `1` | routes to crawl breadth-first from the url |
 | `--budget <mb>` | `40` | clone asset budget; the lowest priority is cut first |
 | `--scripts` | off | keep the cloned page's scripts wired up |
 | `--skip-verify` | off | do not load the clone back and score it |
@@ -122,6 +123,48 @@ Scripts are saved but disabled by default. A rendered DOM plus live scripts mean
 a framework hydrating onto markup it did not produce; `--scripts` keeps them if
 that is what you want.
 
+### Crawling a site
+
+`--routes` above 1 walks the site breadth-first from the entry url. Destinations
+come from anchors in the rendered DOM, read after hydration: they are what the
+site itself offers, whatever framework built them, and finding them needs no
+sitemap and no framework-specific knowledge. Breadth-first means a route cap
+keeps the pages nearest the entry rather than whichever branch was walked first.
+
+Every route is its own navigation, because a route can only be seen as the
+browser builds it. One asset ledger is shared across them, so the second route
+pays for nothing the first already saved — each route runs in a fresh browser
+with a cold cache, and without the ledger a five-route clone of
+`tailwindcss.com` would fetch the same 53 assets five times.
+
+Links between routes are rewritten after the crawl, not during it. While the
+first route is being captured there is no way to know which of its destinations
+will end up cloned, so a link can only be pointed at a file once the set of
+routes is closed.
+
+A url reference is matched as a whole delimited token, never as a substring.
+That rule is what the crawl turns on, and it is easy to get wrong in two ways at
+once:
+
+- The entry url is a prefix of every absolute url on its own site, so a
+  substring match rewrites the front of `https://x.com/plus` and leaves
+  `./index.htmlplus`.
+- A cloned route prefixes the uncloned pages beneath it. `/docs` sits inside
+  `/docs/installation`, and there is no longer alternative to prefer because
+  that page was never cloned.
+
+Matching must also be a single pass. Replacing in sequence is unsafe in both
+directions: the short url first splices its path into the middle of the long
+one, and the long url first leaves `./docs/install/index.html`, which the short
+url then matches inside the result just written. A fragment or a query may
+follow a match, since both address the same document; a path separator may not.
+
+Anchors are counted honestly after the pass. `unresolved` is a destination still
+addressing the site — a page the crawl did not reach, whether it was over the
+route cap or refused as a non-document. Cloning 5 of the 311 routes
+`tailwindcss.com` offers leaves most links with nowhere local to go, and the
+number says so.
+
 ### Verification
 
 A clone nobody loaded is a claim. Unless `--skip-verify` is passed, the copy is
@@ -131,17 +174,24 @@ radius, spacing, polarity and layout shape. Colours are compared perceptually in
 OKLab: a clone can move a channel by one unit, and a score that calls `#08090a`
 and `#090a0b` a total mismatch is measuring string equality, not fidelity.
 
-| Site | Architecture | Fidelity | Files |
-| --- | --- | --- | --- |
-| `example.com` | static | 100% | 1 |
-| `tailwindcss.com` | Next.js, utility CSS | 100% | 61 |
-| `linear.app` | Next.js, styled-components | 100% | 402 |
-| `vercel.com` | Next.js, Tailwind, CSS Modules | 100% | 94 |
-| `stripe.com` | Next.js, CSS Modules | 100% | 98 |
+Every cloned route is scored, not just the entry. The manifest reports the mean
+and the lowest, because an average hides a single broken route and the worst one
+does not.
+
+| Site | Architecture | Routes | Fidelity | Unique assets |
+| --- | --- | --- | --- | --- |
+| `example.com` | static | 1 of 1 | 100% | 0 |
+| `stripe.com` | Next.js, CSS Modules | 1 of 112 | 100% | 98 |
+| `tailwindcss.com` | Next.js, utility CSS | 5 of 311 | 100% | 109 |
+| `linear.app` | Next.js, styled-components | 3 of 81 | 100% | 411 |
+| `vercel.com` | Next.js, Tailwind, CSS Modules | 3 of 79 | 100% | 146 |
 
 ### What a clone is not
 
-- **One route.** Client-side routing is not crawled; the clone is the url given.
+- **Only what is linked.** Routes come from anchors, so a page reachable only by
+  a form, a script-driven navigation or a login is never found. The crawl also
+  refuses anything that is not a document: a linked pdf keeps its address and is
+  counted as unresolved.
 - **Cross-origin frames and workers.** They run in their own renderer, which a
   page-level session cannot read. Their addresses are kept as `data-design-os-src`
   and the frames emptied, because a frame left pointing at the origin fails on
@@ -181,6 +231,7 @@ src/cdp.js         Chrome launch and DevTools Protocol client
 src/probe.js       browser-side sources: pre-document probe, post-load harvest
 src/inspect.js     one page load -> the whole pipeline
 src/clone.js       localise, rewrite, serve, and score a copy
+src/crawl.js       breadth-first multi-route cloning
 src/extract.js     rendered page -> design direction
 src/commands.js    command implementations, shared by CLI and MCP
 src/mcp.js         MCP stdio server
@@ -189,9 +240,10 @@ bin/design-os.js   CLI
 ```
 
 Zero runtime dependencies. Node 22 ships a global `WebSocket`, so driving Chrome needs no
-Puppeteer and no Playwright; `npm test` runs 31 checks on stdlib `node:test`, including a
-full pipeline read off a local fixture served over `node:http` and a clone of a page whose
-CSS exists only in the CSSOM.
+Puppeteer and no Playwright; `npm test` runs 37 checks on stdlib `node:test`, including a
+full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
+exists only in the CSSOM, and a four-route crawl whose every rewritten link is fetched
+back through the served copy.
 
 ## MCP
 
@@ -200,7 +252,7 @@ CSS exists only in the CSSOM.
 | Tool | Purpose |
 | --- | --- |
 | `design_inspect` | Load a url once and report its rendering pipeline and its design. |
-| `design_clone` | Write a runnable local copy of a url, then load it back and score it. |
+| `design_clone` | Copy a url, or crawl a site, then load every route back and score it. |
 | `design_directions` | Generate deterministic directions and write a gallery. |
 
 Both call `src/commands.js`, the same entry point the CLI uses, so a tool call and a shell
@@ -272,6 +324,7 @@ Decision 4 is what makes a run instant and free where Rivet's is metered and tak
 ## Next
 
 - `open` — dev-server attach and proxy
+- component extraction from a cloned route
 - `variants start|status|commit` over `git worktree`
 
 ## Requirements
