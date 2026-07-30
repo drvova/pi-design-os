@@ -15,6 +15,7 @@ attachment and variant worktrees are not built yet.
 ```bash
 node bin/design-os.js directions --count 24 --seed monozukuri --open
 node bin/design-os.js inspect stripe.com --screenshot --gallery --open
+node bin/design-os.js clone linear.app
 node bin/design-os.js mcp
 ```
 
@@ -27,6 +28,9 @@ node bin/design-os.js mcp
 | `--timeout <ms>` | `30000` | per-operation Chrome timeout |
 | `--screenshot` | off | also write a PNG of the loaded page |
 | `--gallery` | off | render the extracted direction as HTML |
+| `--budget <mb>` | `40` | clone asset budget; the lowest priority is cut first |
+| `--scripts` | off | keep the cloned page's scripts wired up |
+| `--skip-verify` | off | do not load the clone back and score it |
 | `--out <path>` | `.design-os/` | artefact destination |
 | `--open` | off | open the result in the browser |
 
@@ -84,6 +88,70 @@ directions use, so it renders in the same gallery and can be compared against th
 directly. Snapping to shared axes is what makes a site comparable; the raw reading is
 carried through untouched beside it, because that is what makes it truthful.
 
+## What `clone` writes
+
+`clone` runs the same single navigation `inspect` does and, before the session
+closes, writes a runnable copy beside the report. Fetching the assets on a second
+load would copy a page the report does not describe.
+
+What gets localised is decided by the network log, not by parsing markup. The log
+is the only record of what the browser actually fetched, so rewriting known urls
+needs no HTML or CSS parser and cannot be defeated by an attribute syntax nobody
+anticipated. A root-relative reference resolves against the origin of the file
+holding it, so each stylesheet is rewritten against its own origin rather than
+the page's — a font referenced as `/fonts/x.woff2` from a CDN stylesheet means
+the CDN's root.
+
+Three things have to be repaired on the way out, and each was found by loading a
+clone back and watching it fail:
+
+- **CSS that exists only in the CSSOM.** `insertRule` never touches the `<style>`
+  element it belongs to, so serialization cannot see it. On a styled-components
+  page that is the entire stylesheet — 1344 rules on `linear.app` — and the clone
+  renders unstyled. Every inline sheet is written back to its owner, and
+  constructed sheets held in `adoptedStyleSheets` are materialised into one.
+- **The `<html>` element.** `Element.getHTML()` serializes children, the way
+  `innerHTML` does, so shadow-aware serialization drops the root element. Its
+  attributes are not decoration: `tailwindcss.com` defines `--font-inter` through
+  a class on `<html>`, and without it every font falls back to system.
+- **The origin's own policy.** A CSP naming the original's hosts blocks every
+  local file, and an SRI hash fails the moment a reference is rewritten. Both are
+  stripped, along with resource hints, which can only 404 against a clone.
+
+Scripts are saved but disabled by default. A rendered DOM plus live scripts means
+a framework hydrating onto markup it did not produce; `--scripts` keeps them if
+that is what you want.
+
+### Verification
+
+A clone nobody loaded is a claim. Unless `--skip-verify` is passed, the copy is
+served over http and put through the identical analysis, and the two designs are
+scored against each other on surface, accent, palette, families, type scale,
+radius, spacing, polarity and layout shape. Colours are compared perceptually in
+OKLab: a clone can move a channel by one unit, and a score that calls `#08090a`
+and `#090a0b` a total mismatch is measuring string equality, not fidelity.
+
+| Site | Architecture | Fidelity | Files |
+| --- | --- | --- | --- |
+| `example.com` | static | 100% | 1 |
+| `tailwindcss.com` | Next.js, utility CSS | 100% | 61 |
+| `linear.app` | Next.js, styled-components | 100% | 402 |
+| `vercel.com` | Next.js, Tailwind, CSS Modules | 100% | 94 |
+| `stripe.com` | Next.js, CSS Modules | 100% | 98 |
+
+### What a clone is not
+
+- **One route.** Client-side routing is not crawled; the clone is the url given.
+- **Cross-origin frames and workers.** They run in their own renderer, which a
+  page-level session cannot read. Their addresses are kept as `data-design-os-src`
+  and the frames emptied, because a frame left pointing at the origin fails on
+  every future load. Each one is listed in `clone.skipped` with the reason.
+- **Closed shadow roots.** Unreachable from script by design. Open roots are
+  serialized as declarative `<template shadowrootmode>` and counted; hosts whose
+  root could not be reached are counted separately.
+- **Urls a script builds at runtime.** They never appear in the markup, so there
+  is nothing to rewrite.
+
 ## How the engine works
 
 Generation is deterministic and free. A seed drives a PRNG; hues are spread **evenly**
@@ -112,6 +180,7 @@ src/gallery.js     one self-contained HTML document
 src/cdp.js         Chrome launch and DevTools Protocol client
 src/probe.js       browser-side sources: pre-document probe, post-load harvest
 src/inspect.js     one page load -> the whole pipeline
+src/clone.js       localise, rewrite, serve, and score a copy
 src/extract.js     rendered page -> design direction
 src/commands.js    command implementations, shared by CLI and MCP
 src/mcp.js         MCP stdio server
@@ -120,8 +189,9 @@ bin/design-os.js   CLI
 ```
 
 Zero runtime dependencies. Node 22 ships a global `WebSocket`, so driving Chrome needs no
-Puppeteer and no Playwright; `npm test` runs 28 checks on stdlib `node:test`, including a
-full pipeline read off a local fixture served over `node:http`.
+Puppeteer and no Playwright; `npm test` runs 31 checks on stdlib `node:test`, including a
+full pipeline read off a local fixture served over `node:http` and a clone of a page whose
+CSS exists only in the CSSOM.
 
 ## MCP
 
@@ -130,6 +200,7 @@ full pipeline read off a local fixture served over `node:http`.
 | Tool | Purpose |
 | --- | --- |
 | `design_inspect` | Load a url once and report its rendering pipeline and its design. |
+| `design_clone` | Write a runnable local copy of a url, then load it back and score it. |
 | `design_directions` | Generate deterministic directions and write a gallery. |
 
 Both call `src/commands.js`, the same entry point the CLI uses, so a tool call and a shell

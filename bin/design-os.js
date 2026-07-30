@@ -19,23 +19,30 @@ const HELP = `design-os — explore design directions, and read them off real si
 Usage:
   design-os directions [options]
   design-os inspect <url> [options]
+  design-os clone <url> [options]
   design-os mcp
 
 Commands:
   directions        generate deterministic design directions and a gallery
   inspect           load a url once and report its rendering pipeline and design
-  mcp               serve design_inspect and design_directions over MCP stdio
+  clone             write a runnable local copy of a url, then verify it
+  mcp               serve the three tools over MCP stdio
 
 directions options:
   --count <n>       directions to generate, 1-64             (default 12)
   --seed <text>     identical seeds reproduce output          (default random)
   --polarity <p>    light | dark | both                       (default both)
 
-inspect options:
+inspect and clone options:
   --wait <ms>       ceiling on waiting for network idle       (default 15000)
   --timeout <ms>    per-operation Chrome timeout              (default 30000)
   --screenshot      also write a PNG of the loaded page
-  --gallery         render the extracted direction as HTML
+  --gallery         render the extracted direction as HTML    (inspect)
+
+clone options:
+  --budget <mb>     asset size budget, lowest priority cut first  (default 40)
+  --scripts         keep the page's scripts wired up instead of disabling them
+  --skip-verify     do not load the clone back and score it
 
 shared options:
   --out <path>      artefact destination                      (default .design-os/)
@@ -52,8 +59,11 @@ const OPTIONS = {
   out: { type: 'string' },
   wait: { type: 'string' },
   timeout: { type: 'string' },
+  budget: { type: 'string' },
   screenshot: { type: 'boolean', default: false },
   gallery: { type: 'boolean', default: false },
+  scripts: { type: 'boolean', default: false },
+  'skip-verify': { type: 'boolean', default: false },
   open: { type: 'boolean', default: false },
   help: { type: 'boolean', default: false },
 };
@@ -81,7 +91,9 @@ async function main(argv) {
   const handler = COMMANDS[command];
   if (!handler) throw usage(`unknown command "${command}". Known commands: ${KNOWN.join(', ')}`);
 
-  return emit(await handler({ ...parsed.values, url: target }));
+  // parseArgs keeps the dashed spelling; commands take one camelCase shape.
+  const { 'skip-verify': skipVerify, ...values } = parsed.values;
+  return emit(await handler({ ...values, skipVerify, url: target }));
 }
 
 try {

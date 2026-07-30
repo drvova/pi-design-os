@@ -21,6 +21,7 @@
  * from a scripted one.
  */
 
+import { captureClone } from './clone.js';
 import { openPage } from './cdp.js';
 import { CommandError } from './envelope.js';
 import { toDirection } from './extract.js';
@@ -46,7 +47,7 @@ const HINT_RELS = new Set(['preconnect', 'dns-prefetch', 'preload', 'moduleprelo
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function normaliseUrl(raw) {
+export function normaliseUrl(raw) {
   if (!raw) throw new CommandError('USAGE_ERROR', 'a url is required.');
   const candidate = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
 
@@ -278,9 +279,10 @@ function collect(session) {
 /**
  * Loads a url once and reports the whole pipeline.
  *
- * @param {{url:string, wait?:number, timeout?:number, screenshot?:boolean}} options
+ * @param {{url:string, wait?:number, timeout?:number, screenshot?:boolean,
+ *   clone?:{dir:string, scripts?:boolean, maxBytes?:number}}} options
  */
-export async function inspectPage({ url, wait = 15000, timeout = 30000, screenshot = false }) {
+export async function inspectPage({ url, wait = 15000, timeout = 30000, screenshot = false, clone = null }) {
   const target = normaliseUrl(url);
   const session = await openPage({ timeout });
 
@@ -370,6 +372,19 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
     if (screenshot) {
       shot = (await session.send('Page.captureScreenshot', { format: 'png' })).data;
     }
+
+    // Last, and only last. Snapshotting writes the CSSOM back into the DOM and
+    // mirrors field state onto attributes; running it any earlier would put its
+    // own mutations into the measurements above.
+    const cloned = clone
+      ? await captureClone(session, {
+          assets,
+          pageUrl: harvest.document.url,
+          outDir: clone.dir,
+          keepScripts: clone.scripts,
+          maxBytes: clone.maxBytes,
+        })
+      : null;
 
     const milestones = collected.milestones();
     const milestone = (name) => milestones.find((entry) => entry.name === name)?.timestamp;
@@ -552,6 +567,7 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
       },
 
       stack: harvest.stack,
+      clone: cloned && { ...cloned, attachShadowCalls: probe.apis.attachShadow?.total ?? 0 },
       direction: toDirection(harvest.design, { url: harvest.document.url, title: harvest.document.title }),
       screenshot: shot,
     };

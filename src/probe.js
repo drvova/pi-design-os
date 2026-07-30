@@ -320,8 +320,26 @@ export const HARVEST = `
   // The page canvas is painted from html/body, and it is the largest surface on
   // the page. Sampling only their descendants misses the one colour a design is
   // read against; descendants are transparent far more often than not.
+  // querySelectorAll stops at a shadow boundary, so on a web-component site the
+  // design lives in the part of the tree a flat walk never reaches. Open roots
+  // are descended into; closed ones are not reachable from script.
   var body = document.body;
-  var descendants = body ? Array.prototype.slice.call(body.getElementsByTagName('*'), 0, 3000) : [];
+  var descendants = [];
+  var total = 0;
+  if (body) {
+    (function gather(root, depth) {
+      var nodes = root.querySelectorAll('*');
+      total += nodes.length;
+      if (depth > 12) return;
+      for (var g = 0; g < nodes.length; g += 1) {
+        if (descendants.length < 3000) descendants.push(nodes[g]);
+        if (nodes[g].shadowRoot) gather(nodes[g].shadowRoot, depth + 1);
+      }
+    })(body, 0);
+  }
+  // Style elements this tool materialises into a clone are its own scaffolding.
+  // Counting them would make every clone look larger than what it copied.
+  total -= document.querySelectorAll('style[data-design-os]').length;
   var all = body ? [document.documentElement, body].concat(descendants) : [];
   var sampled = 0;
   var viewport = Math.max(1, window.innerWidth * window.innerHeight);
@@ -476,7 +494,7 @@ export const HARVEST = `
     },
     layout: {
       sampled: sampled,
-      elements: body ? body.getElementsByTagName('*').length : 0,
+      elements: total,
       maxDepth: depth,
       grids: grids,
       flexes: flexes,
@@ -518,5 +536,122 @@ export const resolveTokens = (names) => `
     if (value) resolved[names[i]] = value.length > 120 ? value.slice(0, 120) + '…' : value;
   }
   return resolved;
+})();
+`;
+
+/**
+ * Serializes the live document for cloning.
+ *
+ * `outerHTML` reads element text, but `insertRule` writes to the CSSOM without
+ * ever touching the `<style>` element it belongs to. Every CSS-in-JS rule is
+ * therefore invisible to serialization — on a styled-components site that is the
+ * entire stylesheet, and the clone would render unstyled. Each inline sheet is
+ * written back to its owner node first, and constructed sheets held only in
+ * `adoptedStyleSheets` are materialised into a `<style>` of their own.
+ *
+ * Field state lives in properties rather than attributes for the same reason, so
+ * what the user sees in an input is mirrored onto the attribute that serializes.
+ *
+ * Shadow roots are invisible to `outerHTML` too, which clones a web-component
+ * site as a page of empty custom elements. Open roots are collected and handed
+ * to `getHTML`, which writes them as the declarative `<template shadowrootmode>`
+ * a browser parses straight back. Closed roots are unreachable by design; they
+ * are counted so the gap is stated rather than found later.
+ */
+export const SNAPSHOT = `
+(function () {
+  var notes = { inlineSheets: 0, adoptedSheets: 0, rules: 0, unreadable: 0, fields: 0, shadowRoots: 0, closedHosts: 0 };
+
+  // Constructed sheets attached to a root are materialised into it, so a shadow
+  // tree keeps its styling once serialized.
+  function adopt(root, label) {
+    var sheets = root.adoptedStyleSheets || [];
+    for (var i = 0; i < sheets.length; i += 1) {
+      try {
+        var rules = sheets[i].cssRules;
+        if (!rules || rules.length === 0) continue;
+        var text = [];
+        for (var r = 0; r < rules.length; r += 1) text.push(rules[r].cssText);
+        var style = document.createElement('style');
+        style.setAttribute('data-design-os', label);
+        style.textContent = text.join('\\n');
+        (root === document ? document.head : root).appendChild(style);
+        notes.adoptedSheets += 1;
+        notes.rules += rules.length;
+      } catch (error) {
+        notes.unreadable += 1;
+      }
+    }
+  }
+
+  for (var i = 0; i < document.styleSheets.length; i += 1) {
+    var sheet = document.styleSheets[i];
+    var owner = sheet.ownerNode;
+    if (!owner || owner.tagName !== 'STYLE') continue;
+    try {
+      var rules = sheet.cssRules;
+      if (!rules || rules.length === 0) continue;
+      var text = [];
+      for (var r = 0; r < rules.length; r += 1) text.push(rules[r].cssText);
+      owner.textContent = text.join('\\n');
+      notes.inlineSheets += 1;
+      notes.rules += rules.length;
+    } catch (error) {
+      notes.unreadable += 1;
+    }
+  }
+
+  adopt(document, 'adopted');
+
+  // Open roots only; a closed root cannot be reached from script by design.
+  var roots = [];
+  (function descend(node, depth) {
+    if (depth > 12 || roots.length > 2000) return;
+    var elements = node.querySelectorAll('*');
+    for (var e = 0; e < elements.length; e += 1) {
+      var host = elements[e];
+      if (!host.shadowRoot) {
+        if (host.tagName.indexOf('-') !== -1) notes.closedHosts += 1;
+        continue;
+      }
+      roots.push(host.shadowRoot);
+      adopt(host.shadowRoot, 'adopted-shadow');
+      descend(host.shadowRoot, depth + 1);
+    }
+  })(document, 0);
+  notes.shadowRoots = roots.length;
+
+  var fields = document.querySelectorAll('input, textarea, select option');
+  for (var f = 0; f < fields.length; f += 1) {
+    var field = fields[f];
+    if (field.tagName === 'OPTION') {
+      if (field.selected) { field.setAttribute('selected', ''); notes.fields += 1; }
+    } else if (field.type === 'checkbox' || field.type === 'radio') {
+      if (field.checked) { field.setAttribute('checked', ''); notes.fields += 1; }
+    } else if (field.value) {
+      field.setAttribute('value', field.value);
+      notes.fields += 1;
+    }
+  }
+
+  // getHTML serializes an element's children, the way innerHTML does, so the
+  // <html> element has to be rebuilt around it. Its attributes are not
+  // decoration: framework theme and font-variable classes live there, and a
+  // clone that drops them falls back to system fonts everywhere.
+  var root = document.documentElement;
+  var markup;
+  if (typeof root.getHTML === 'function') {
+    var open = '';
+    for (var n = 0; n < root.attributes.length; n += 1) {
+      var attribute = root.attributes[n];
+      var quoted = String(attribute.value).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+      open += ' ' + attribute.name + '="' + quoted + '"';
+    }
+    markup = '<html' + open + '>' + root.getHTML({ serializableShadowRoots: true, shadowRoots: roots }) + '</html>';
+  } else {
+    markup = root.outerHTML;
+  }
+
+  return { html: '<!doctype html>\\n' + markup, notes: notes };
 })();
 `;

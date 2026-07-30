@@ -71,7 +71,7 @@ test('notifications are never answered', async () => {
 test('every tool declares a schema the model can fill in', async () => {
   const [reply] = await converse([{ jsonrpc: '2.0', id: 1, method: 'tools/list' }]);
   const names = reply.result.tools.map((tool) => tool.name);
-  assert.deepEqual(names, ['design_inspect', 'design_directions']);
+  assert.deepEqual(names, ['design_inspect', 'design_clone', 'design_directions']);
 
   for (const tool of reply.result.tools) {
     assert.equal(tool.inputSchema.type, 'object');
@@ -79,6 +79,10 @@ test('every tool declares a schema the model can fill in', async () => {
     assert.ok(Object.keys(tool.inputSchema.properties).length > 0);
   }
   assert.deepEqual(reply.result.tools[0].inputSchema.required, ['url']);
+  const clone = reply.result.tools.find((tool) => tool.name === 'design_clone');
+  assert.deepEqual(clone.inputSchema.required, ['url']);
+  assert.equal(clone.inputSchema.properties.scripts.default, false, 'a rendered DOM plus live scripts double-hydrates');
+  assert.equal(clone.inputSchema.properties.skipVerify.default, false, 'a clone is verified unless asked otherwise');
 });
 
 test('an unknown method is a protocol error, not a tool result', async () => {
