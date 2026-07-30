@@ -479,6 +479,34 @@ site's own scripts, and a dev server would try to rebuild a production bundle it
 did not produce, on urls that loader constructs at runtime. Serve a mirror over
 http instead — that is what makes it work.
 
+### What a copy could not keep, and now does
+
+**A body the browser will not hand back is fetched from the origin.**
+`Network.getResponseBody` answers from a buffer nothing obliges the browser to
+keep, and two kinds of asset reliably are not in it: media, which is
+range-streamed rather than buffered, and workers, which run in their own target.
+A clone of svelte.dev left a 9MB video and a search worker behind and then failed
+to load the video — one render-affecting failure in a copy otherwise scored at
+100%. Both are only urls, so they are now requested directly, with the page as
+referer. That clone reads **0 of 40** failed where it read 1 of 40. Cookies are
+not carried, so an asset behind a session still cannot be had, and says so.
+
+**A head a parser would reject is repaired before serializing.** A script can put
+any node in the head through the DOM and the DOM keeps it — webflow.com's
+analytics puts a hidden iframe there. Serializing that does not round-trip: the
+parser closes `<head>` at the iframe, and the charset declaration, the title and
+twelve stylesheet links all become body content. A charset outside the head's
+opening bytes is not honoured at all, so this was a correctness fault and not only
+a scoring one. The node is moved to the top of the body rather than dropped, so
+the copy holds the same nodes and reparses to the same shape. webflow.com went
+from 0.999 with elements at 98.2% to a **1**.
+
+**Every shortfall names itself.** `weakest` listed only checks below 0.9, so a
+score of 0.999 arrived with an empty list and finding the cause took a separate
+run against a report that already knew. It now lists anything below 1, floored
+rather than rounded, because at both zero and one decimal place a shortfall could
+print as 100%.
+
 ### One at a time, and only work that fits
 
 Three guards, each of which exists because its absence caused a real failure.
@@ -675,7 +703,7 @@ Puppeteer and no Playwright; `npm test` runs 63 checks on stdlib `node:test`, in
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
 exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back
 through the served copy, and a Feature-Sliced run asserting that a slice carries the rules
-that matched it and none that did not. Total: 75 checks, including one that asserts the native and MCP surfaces are the same
+that matched it and none that did not. Total: 76 checks, including one that asserts the native and MCP surfaces are the same
 object rather than two copies of it, one that asserts a degraded capture is drawn above the
 verdict it invalidates, and one that asserts the two front ends never offer the same tool
 twice. The extension takes its config paths as an argument, so what a machine happens to

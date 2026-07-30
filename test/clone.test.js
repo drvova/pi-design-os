@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
@@ -177,5 +177,73 @@ test('a clone carries CSS that only ever existed in the CSSOM', async (t) => {
   } finally {
     server.close();
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a head a parser would reject is repaired, so the copy reparses the same', async (t) => {
+  try {
+    chromePath();
+  } catch {
+    t.skip('no Chrome or Chromium on this machine');
+    return;
+  }
+
+  // An analytics script putting a hidden iframe in the head, which is what
+  // webflow.com does. The DOM keeps it there; the parser will not, and everything
+  // after it -- the charset, the title, every stylesheet link -- becomes body
+  // content when the copy is read back.
+  const page = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Round trip</title>
+<link rel="stylesheet" href="/site.css"><script>
+  var frame = document.createElement('iframe');
+  frame.hidden = true; frame.width = 0; frame.height = 0; frame.src = 'about:blank';
+  document.head.insertBefore(frame, document.head.firstChild);
+</script></head><body><main><h1>Round trip</h1></main></body></html>`;
+
+  const origin = createServer((request, response) => {
+    if (request.url.startsWith('/site.css')) {
+      response.writeHead(200, { 'content-type': 'text/css' });
+      response.end('body { background: #101018; color: #eee; font-family: sans-serif }');
+      return;
+    }
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end(page);
+  });
+  await new Promise((ready) => origin.listen(0, '127.0.0.1', ready));
+  const url = `http://127.0.0.1:${origin.address().port}/`;
+
+  const out = await mkdtemp(join(tmpdir(), 'design-os-roundtrip-'));
+  try {
+    const report = await inspectPage({ url, wait: 4000, timeout: 40000, clone: { dir: out } });
+    assert.equal(report.capture.degraded, false);
+    const markup = await readFile(join(out, 'index.html'), 'utf8');
+
+    const headEnd = markup.toLowerCase().indexOf('</head>');
+    const bodyStart = markup.toLowerCase().indexOf('<body');
+    assert.ok(headEnd > 0 && bodyStart > headEnd, 'the copy needs a head and a body');
+
+    // The iframe is kept, and it is out of the head.
+    const frameAt = markup.toLowerCase().indexOf('<iframe');
+    assert.ok(frameAt > 0, 'the node is relocated, not discarded');
+    assert.ok(frameAt > bodyStart, 'an iframe in the head closes it, so it must not be there');
+    assert.match(markup, /data-design-os="moved-from-head"/);
+
+    // And what a parser would have relocated is still where it belongs. A charset
+    // outside the head's opening bytes is not honoured at all.
+    assert.ok(markup.toLowerCase().indexOf('charset') < headEnd, 'the charset must stay in the head');
+    assert.ok(markup.toLowerCase().indexOf('<title') < headEnd, 'the title must stay in the head');
+    assert.ok(markup.toLowerCase().indexOf('stylesheet') < headEnd, 'the stylesheet link must stay in the head');
+
+    // The measure that matters: reading the copy back finds them in the head too.
+    const server = await serveDirectory(out);
+    try {
+      const replica = await inspectPage({ url: `${server.url}index.html`, wait: 4000, timeout: 40000 });
+      assert.equal(replica.capture.renderAffectingFailed, 0);
+      assert.equal(replica.direction.observed.surface.hex.toLowerCase(), '#101018');
+    } finally {
+      await server.close();
+    }
+  } finally {
+    origin.close();
+    await rm(out, { recursive: true, force: true });
   }
 });

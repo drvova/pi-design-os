@@ -46,6 +46,47 @@ const TEXTUAL = new Set(['Stylesheet', 'Document']);
  */
 const ASSET_MIME = /^(?:image|font|audio|video)\/|^text\/css|^application\/(?:font|manifest)/i;
 
+/**
+ * How long to wait when fetching a body the browser will not hand over.
+ *
+ * These are the assets the page already loaded, so the origin is reachable and
+ * warm. A slow one is not worth stalling a clone for.
+ */
+const REFETCH_TIMEOUT_MS = 15_000;
+
+/**
+ * Fetches an asset the browser has but will not give back.
+ *
+ * `Network.getResponseBody` answers from a buffer the browser is under no
+ * obligation to keep. Two kinds of asset reliably are not in it:
+ *
+ *   - Media, which is range-streamed rather than buffered whole. The browser
+ *     replies "No data found for resource with given identifier", and the clone
+ *     was left pointing at the remote video, which then failed to load.
+ *   - Workers, which run in their own target, so the page's session replies
+ *     "No resource with given identifier found".
+ *
+ * Both are only urls, and this process can ask for them itself. The referer is
+ * the page, because an origin that serves media often checks it. Cookies are not
+ * carried, so an asset behind a session still cannot be had — that is reported
+ * rather than hidden.
+ */
+async function refetch(url, referer) {
+  if (!/^https?:/i.test(url)) return null;
+
+  const response = await fetch(url, {
+    headers: { referer, accept: '*/*' },
+    redirect: 'follow',
+    signal: AbortSignal.timeout(REFETCH_TIMEOUT_MS),
+  }).catch((error) => ({ ok: false, status: 0, statusText: error.message }));
+
+  if (!response.ok) return { failed: `refetch ${response.status || ''} ${response.statusText}`.trim() };
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  // Shaped like the CDP reply so the caller keeps one path for both.
+  return { body: buffer.toString('base64'), base64Encoded: true };
+}
+
 const isAsset = (asset) =>
   PRIORITY.includes(asset.type) || (asset.type === 'Other' && ASSET_MIME.test(String(asset.mimeType)));
 
@@ -331,6 +372,8 @@ export async function captureClone(session, {
   const pageOrigin = new URL(pageUrl).origin;
   const written = [];
   const skipped = [];
+  /** Assets the browser would not return and this process fetched instead. */
+  const refetched = [];
   const replacements = [];
   const textual = [];
   let bytes = 0;
@@ -360,10 +403,17 @@ export async function captureClone(session, {
         return null;
       });
 
+    // The browser not having kept a body is not the same as the body not
+    // existing. Ask the origin directly before giving up on the asset.
+    let recovered = null;
     if (!body) {
-      skipped.push({ url: asset.url, reason: unavailable });
-      continue;
+      recovered = await refetch(asset.url, pageUrl);
+      if (recovered?.failed) skipped.push({ url: asset.url, reason: `${unavailable}; ${recovered.failed}` });
+      else if (!recovered) skipped.push({ url: asset.url, reason: unavailable });
     }
+
+    const payload = body ?? (recovered?.body ? recovered : null);
+    if (!payload) continue;
 
     // Same-origin, in mirror mode: keep the served pathname, so a url a script
     // builds at runtime finds the file exactly where the origin had it.
@@ -372,7 +422,8 @@ export async function captureClone(session, {
       mirror && sameOrigin
         ? originPath(asset.url, asset.mimeType)
         : localPath(asset.url, asset.mimeType, LAYOUTS[layout].assetRoot(asset));
-    const content = body.base64Encoded ? Buffer.from(body.body, 'base64') : Buffer.from(body.body, 'utf8');
+    const content = payload.base64Encoded ? Buffer.from(payload.body, 'base64') : Buffer.from(payload.body, 'utf8');
+    if (recovered) refetched.push(asset.url);
     bytes += content.length;
 
     // A same-origin reference already resolves in mirror mode; rewriting it to a
@@ -478,6 +529,7 @@ export async function captureClone(session, {
     // What the CSSOM held and serialization would otherwise have dropped.
     materialised: notes,
     skipped,
+    refetched: refetched.length,
   };
 }
 
@@ -640,10 +692,18 @@ export function compareDesign(original, clone) {
   return {
     score: Number((scores.reduce((total, value) => total + value, 0) / scores.length).toFixed(3)),
     checks: Object.fromEntries(Object.entries(checks).map(([name, value]) => [name, Number(value.toFixed(3))])),
+    // Every shortfall, not only the severe ones.
+    //
+    // This filtered below 0.9, so a score of 0.999 came with an empty list and
+    // the check dragging it stayed invisible: finding that webflow.com was short
+    // on elements took a separate run against a report that already knew. A
+    // rounded percentage hid it twice over, printing 0.999 as "100%".
     weakest: Object.entries(checks)
-      .filter(([, value]) => value < 0.9)
+      .filter(([, value]) => value < 1)
       .sort((x, y) => x[1] - y[1])
-      .map(([name, value]) => `${name} ${Math.round(value * 100)}%`),
+      // Floored, never rounded: a check below one must not be able to print as
+      // 100%, which is what it did at both zero and one decimal place.
+      .map(([name, value]) => `${name} ${Math.floor(value * 1000) / 10}%`),
   };
 }
 

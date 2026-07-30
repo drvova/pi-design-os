@@ -369,7 +369,13 @@ export const HARVEST = `
   // structure, so none of them count on either side. Style elements this tool
   // materialises are discounted for the same reason — neither side should be
   // charged for something the copy is not meant to reproduce.
-  total -= document.querySelectorAll('style[data-design-os]').length + document.body.querySelectorAll('link').length;
+  //
+  // Only links inside the body, because the count above is a walk from the body:
+  // a link in the head was never in it. Subtracting head hints as well -- tried,
+  // on the strength of a histogram that walked documentElement instead and so
+  // agreed with the guess -- charges the original for elements it never counted,
+  // and made retool.com worse rather than better.
+  total -= document.querySelectorAll('style[data-design-os]').length + body.querySelectorAll('link').length;
   var all = body ? [document.documentElement, body].concat(descendants) : [];
   var sampled = 0;
   var viewport = Math.max(1, window.innerWidth * window.innerHeight);
@@ -793,6 +799,39 @@ export const SNAPSHOT = `
   // decoration: framework theme and font-variable classes live there, and a
   // clone that drops them falls back to system fonts everywhere.
   var root = document.documentElement;
+  // Move out of <head> anything a parser will not accept there.
+  //
+  // A script can put any node in the head through the DOM, and the DOM keeps it:
+  // webflow's analytics puts a hidden iframe there. Serializing that and reading
+  // it back does not round-trip, because the parser enforces what the DOM did
+  // not — it closes <head> at the iframe and everything after it becomes body
+  // content. On webflow.com that moved the charset declaration, the title and
+  // twelve stylesheet links into <body>, and a charset outside the head's first
+  // bytes is not honoured at all.
+  //
+  // The offending node is kept, not dropped, and placed where a parser accepts
+  // it, so the copy holds the same nodes and reparses to the same shape.
+  var HEAD_ALLOWS = { BASE: 1, LINK: 1, META: 1, NOSCRIPT: 1, SCRIPT: 1, STYLE: 1, TEMPLATE: 1, TITLE: 1 };
+  var relocated = 0;
+  if (document.head && document.body) {
+    var stray = [];
+    for (var h = 0; h < document.head.children.length; h++) {
+      var child = document.head.children[h];
+      if (!HEAD_ALLOWS[child.tagName]) stray.push(child);
+    }
+    // A fragment keeps their order when they arrive at the top of the body.
+    if (stray.length > 0) {
+      var moving = document.createDocumentFragment();
+      for (var m = 0; m < stray.length; m++) {
+        stray[m].setAttribute('data-design-os', 'moved-from-head');
+        moving.appendChild(stray[m]);
+      }
+      document.body.insertBefore(moving, document.body.firstChild);
+      relocated = stray.length;
+    }
+  }
+  notes.relocatedFromHead = relocated;
+
   var markup;
   if (typeof root.getHTML === 'function') {
     var open = '';
