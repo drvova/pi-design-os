@@ -94,6 +94,20 @@ Languages are usually separate routes, so `routes` reaches them. A language or
 menu that only changes state without changing the url is not captured — say so
 rather than implying it was.
 
+## Cost, and what will be refused
+
+A tool call has a deadline; roughly thirty seconds per route is the estimate. Ask
+for more than fits and it is refused **before** a browser starts, naming the
+alternative — fewer routes, `skipVerify`, or the CLI. That refusal is a real
+answer: pass it on rather than retrying, because retrying is what starts a second
+browser beside the first.
+
+Only one browser-driving call runs at a time. If one is already running the next
+is refused with what it is waiting on; wait rather than retry.
+
+A `design_batch` with a deadline does what fits and returns `incomplete` with
+`continueBy`. Call it again to continue — the ledger makes that a resume.
+
 ## Cloning many sites
 
 For more than a handful, write the targets to a file and use `design_batch`

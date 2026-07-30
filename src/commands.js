@@ -15,7 +15,7 @@ import { serveClone, servedClones, stopClones } from './clone.js';
 
 import { cloneSite } from './crawl.js';
 import { generate } from './directions.js';
-import { ok, progress, usage } from './envelope.js';
+import { CommandError, ok, progress, usage } from './envelope.js';
 import { render } from './gallery.js';
 import { inspectPage, normaliseUrl } from './inspect.js';
 
@@ -23,6 +23,70 @@ const WORKSPACE = '.design-os';
 
 /** Asset rows are repetitive; the complete list always lands on disk regardless. */
 const MAX_INLINE_ASSETS = 150;
+
+/**
+ * What one route costs, measured rather than guessed.
+ *
+ * Two-route clones of the sites in the README finished in 24 to 37 seconds, and
+ * single routes in 19 to 37 — verification included, since those runs verified.
+ * Thirty seconds a route is therefore a little pessimistic, which is the right
+ * direction: refusing work that would just have fitted is a nuisance, accepting
+ * work that cannot finish is what caused an incident.
+ *
+ * The first estimate here doubled this for verification and was wrong twice over:
+ * the measurements already included it, and the result refused an ordinary
+ * single-route clone.
+ */
+const PER_ROUTE_MS = 30_000;
+
+/**
+ * Only one browser-driving command at a time.
+ *
+ * A transport with a request timeout will abandon a call that runs long, and a
+ * caller that retries then has two of these running at once, each launching its
+ * own browser. That is exactly how a stack of timed-out clones turned into
+ * unresponsive Chrome processes: nothing refused the second call.
+ *
+ * The second caller is told what is already running rather than queued, because
+ * a caller that has already timed out once should not be made to wait again.
+ */
+let running = null;
+
+async function exclusive(what, run) {
+  if (running) {
+    throw new CommandError(
+      'OPERATION_FAILED',
+      `design-os is already running ${running}. Only one browser-driving command runs at a time, ` +
+        'because a second would start another browser while the first is still working. Wait for it, or stop it.',
+    );
+  }
+  running = what;
+  try {
+    return await run();
+  } finally {
+    running = null;
+  }
+}
+
+/**
+ * Refuses work that cannot finish inside the caller's window.
+ *
+ * A tool call over a request-response transport has a deadline; a terminal does
+ * not. Work that plainly exceeds the deadline is refused here, before a browser
+ * is launched, rather than being abandoned mid-flight and retried.
+ */
+function withinBudget({ deadline, routes, verify, what, alternative }) {
+  if (!deadline) return;
+
+  const estimate = routes * PER_ROUTE_MS * (verify ? 1 : 0.6);
+  if (estimate <= deadline) return;
+
+  throw new CommandError(
+    'USAGE_ERROR',
+    `${what} needs about ${Math.round(estimate / 1000)}s and this caller allows ${Math.round(deadline / 1000)}s. ` +
+      `A call abandoned partway leaves a browser running, so it is refused instead. ${alternative}`,
+  );
+}
 
 /** Opens a path with the platform's default handler. */
 function openInBrowser(target) {
@@ -167,6 +231,11 @@ export async function directions(options = {}) {
 export async function inspect(options = {}) {
   if (!options.url) throw usage('inspect needs a url, e.g. design-os inspect stripe.com');
 
+  return exclusive(`an inspection of ${options.url}`, () => inspectOnce(options));
+}
+
+async function inspectOnce(options) {
+
   const wait = integer(options.wait, { name: 'wait', min: 500, max: 120000, fallback: 15000 });
   const timeout = integer(options.timeout, { name: 'timeout', min: 5000, max: 180000, fallback: 30000 });
   const screenshot = Boolean(options.screenshot);
@@ -203,6 +272,27 @@ export async function inspect(options = {}) {
  */
 export async function clone(options = {}) {
   if (!options.url) throw usage('clone needs a url, e.g. design-os clone stripe.com');
+
+  // The url is checked first: a caller who typed a bad one should be told that,
+  // not told the run would take too long.
+  normaliseUrl(options.url);
+
+  const requested = integer(options.routes, { name: 'routes', min: 1, max: 200, fallback: 1 });
+  withinBudget({
+    deadline: options.deadline,
+    routes: requested,
+    verify: !options.skipVerify,
+    what: `cloning ${requested} route(s)`,
+    alternative:
+      requested > 1
+        ? 'Ask for fewer routes, pass skipVerify, or run `design-os clone` in a terminal where nothing times out.'
+        : 'Run `design-os clone` in a terminal where nothing times out.',
+  });
+
+  return exclusive(`a clone of ${options.url}`, () => cloneOnce(options));
+}
+
+async function cloneOnce(options) {
 
   const wait = integer(options.wait, { name: 'wait', min: 500, max: 120000, fallback: 15000 });
   const timeout = integer(options.timeout, { name: 'timeout', min: 5000, max: 180000, fallback: 30000 });
@@ -354,6 +444,11 @@ export async function slices(options = {}) {
 export async function batch(options = {}) {
   if (!options.from) throw usage('batch needs a list of targets, e.g. design-os batch --from sites.txt');
 
+  return exclusive(`a batch from ${options.from}`, () => batchOnce(options));
+}
+
+async function batchOnce(options) {
+
   const listPath = resolve(options.from);
   const listed = await readFile(listPath, 'utf8').catch(() => null);
   if (listed === null) throw usage(`cannot read ${listPath}`);
@@ -375,9 +470,23 @@ export async function batch(options = {}) {
   let cloned = 0;
   let skipped = 0;
   let failed = 0;
+  let ranOut = false;
+
+  // A caller with a deadline gets as much of the list as fits and is told to call
+  // again. The ledger already makes that a resume rather than a repeat, so there
+  // is no reason to refuse the whole run or to be abandoned halfway through one.
+  const started = Date.now();
+  const routes = integer(options.routes, { name: 'routes', min: 1, max: 200, fallback: 1 });
+  const perTarget = routes * PER_ROUTE_MS * (options.skipVerify ? 0.6 : 1);
 
   for (const [index, target] of targets.entries()) {
     const position = `[${index + 1}/${targets.length}]`;
+
+    if (options.deadline && Date.now() - started + perTarget > options.deadline) {
+      ranOut = true;
+      progress(`${position} stopping here: no time left in this call for another target`);
+      break;
+    }
 
     if (rows[target]?.ok && !options.retry) {
       skipped += 1;
@@ -387,7 +496,9 @@ export async function batch(options = {}) {
 
     progress(`${position} ${target}`);
     try {
-      const envelope = await clone({ ...passthrough, url: target });
+      // cloneOnce, not clone: the batch already holds the lock, and it has
+      // already answered the deadline question for the whole run.
+      const envelope = await cloneOnce({ ...passthrough, url: target });
       const data = envelope.data;
       rows[target] = {
         ok: true,
@@ -419,6 +530,7 @@ export async function batch(options = {}) {
   progress(`${cloned} cloned, ${skipped} already done, ${failed} failed — ledger at ${ledgerPath}`);
 
   const scored = Object.values(rows).filter((row) => row.ok && typeof row.fidelity === 'number');
+  const done = Object.values(rows).filter((row) => row?.ok).length;
   return ok('batch', {
     from: listPath,
     ledger: ledgerPath,
@@ -426,6 +538,10 @@ export async function batch(options = {}) {
     cloned,
     skipped,
     failed,
+    // Set when the caller's window ran out rather than the list.
+    incomplete: ranOut || undefined,
+    remaining: ranOut ? targets.length - done - failed : 0,
+    continueBy: ranOut ? 'call design_batch again with the same list; the ledger makes it resume' : undefined,
     fidelity: scored.length
       ? {
           lowest: Math.min(...scored.map((row) => row.fidelity)),

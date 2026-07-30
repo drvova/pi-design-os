@@ -13,12 +13,13 @@
  * missed the phase it exists to measure.
  */
 
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { CommandError, progress } from './envelope.js';
 
@@ -31,6 +32,101 @@ import { CommandError, progress } from './envelope.js';
  * all through `closeAllSessions`.
  */
 const live = new Set();
+
+const run = promisify(execFile);
+
+/** Profiles this package creates, and nothing else. */
+const PROFILE_PREFIX = 'design-os-chrome-';
+
+/**
+ * The pid of whoever launched a browser, written into its own profile.
+ *
+ * Deciding abandonment from process parentage does not work: a child of a killed
+ * process is reparented to whatever subreaper the session has, which is not
+ * necessarily init, so a test for `ppid <= 1` finds nothing on a normal desktop.
+ * Recording the launcher is exact and needs no assumption about the platform —
+ * if that pid is gone, whatever is still holding the profile has nobody left to
+ * talk to.
+ */
+const LAUNCHER_FILE = '.design-os-launcher';
+
+const alive = (pid) => {
+  try {
+    // Signal 0 tests for existence without delivering anything.
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+};
+
+/** Pids whose command line mentions a path. Empty when nothing holds it. */
+async function holders(path) {
+  const { stdout } = await run('pgrep', ['-f', path]).catch(() => ({ stdout: '' }));
+  return stdout
+    .split('\n')
+    .map((line) => Number(line.trim()))
+    .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid);
+}
+
+/**
+ * Clears browsers and profiles left behind by a launcher that was killed.
+ *
+ * A session closed normally takes its browser and profile with it. A launcher
+ * killed outright does not: the browser it started is reparented and keeps
+ * running, holding a profile directory and burning CPU with nobody left to talk
+ * to it. That happened in the field — a stack of timed-out calls, then a kill,
+ * then a browser nobody owned.
+ *
+ * Only this package's own profiles are considered, and a profile still held by a
+ * living process whose parent is alive is left strictly alone: another design-os
+ * in another terminal is not an orphan.
+ */
+export async function reapOrphans() {
+  const reaped = { browsers: 0, profiles: 0, skipped: 0 };
+  const entries = await readdir(tmpdir()).catch(() => []);
+
+  for (const name of entries) {
+    if (!name.startsWith(PROFILE_PREFIX)) continue;
+    const profile = join(tmpdir(), name);
+
+    const launcher = Number(await readFile(join(profile, LAUNCHER_FILE), 'utf8').catch(() => ''));
+
+    // A profile whose launcher is still running belongs to a live design-os,
+    // possibly in another terminal, and is none of this one's business.
+    if (Number.isInteger(launcher) && launcher > 0 && alive(launcher)) {
+      reaped.skipped += 1;
+      continue;
+    }
+
+    for (const pid of await holders(profile)) {
+      try {
+        process.kill(pid, 'SIGKILL');
+        reaped.browsers += 1;
+      } catch {
+        // Already gone between listing and killing, which is the good case.
+      }
+    }
+
+    // Only remove a profile once nothing is holding it.
+    await new Promise((settled) => setTimeout(settled, 150));
+    if ((await holders(profile)).length > 0) {
+      reaped.skipped += 1;
+      continue;
+    }
+
+    // A profile with no launcher recorded predates this and is only removed once
+    // it is plainly not in use, so a running older version is not disturbed.
+    if (!Number.isInteger(launcher) || launcher <= 0) {
+      const age = await stat(profile).then((info) => Date.now() - info.mtimeMs).catch(() => 0);
+      if (age < 60_000) continue;
+    }
+    await rm(profile, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    reaped.profiles += 1;
+  }
+
+  return reaped;
+}
 
 /** Closes every open session. Returns how many were still running. */
 export async function closeAllSessions() {
@@ -222,7 +318,16 @@ class Session {
  * @returns {Promise<Session>}
  */
 export async function openPage({ headless = true, timeout = 30000 } = {}) {
-  const profile = await mkdtemp(join(tmpdir(), 'design-os-chrome-'));
+  // Before adding another browser, clear any that a killed launcher left behind.
+  const reaped = await reapOrphans();
+  if (reaped.browsers > 0 || reaped.profiles > 0) {
+    progress(`design-os: cleared ${reaped.browsers} orphaned browser(s) and ${reaped.profiles} profile(s)`);
+  }
+
+  const profile = await mkdtemp(join(tmpdir(), PROFILE_PREFIX));
+  // Written before the browser starts, so an abandoned profile is identifiable
+  // even if the launch itself is what goes wrong.
+  await writeFile(join(profile, LAUNCHER_FILE), String(process.pid), 'utf8');
   const flags = [...LAUNCH_FLAGS, `--user-data-dir=${profile}`];
   if (headless) flags.push('--headless=new');
 

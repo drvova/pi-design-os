@@ -420,6 +420,36 @@ Two properties matter more than speed for a run measured in hours:
 The returned rows are summaries — fidelity, routes, slices, assets, the clone and
 report paths. The full report for each target is on disk.
 
+### One at a time, and only work that fits
+
+Three guards, each of which exists because its absence caused a real failure.
+
+**Only one browser-driving command runs at a time.** A transport with a request
+timeout abandons a call that runs long; the work does not stop, and a caller that
+retries then has two of these running at once, each launching its own browser.
+That is how a stack of timed-out clones became unresponsive Chrome processes. A
+second caller is refused immediately with what is already running, rather than
+queued — a caller that has timed out once should not be made to wait again.
+
+**Work that cannot finish in the caller's window is refused before a browser
+starts.** A tool call carries a deadline; a terminal does not. Two-route clones of
+the sites above finished in 24 to 37 seconds, so thirty seconds a route is the
+estimate, and anything beyond the caller's budget is refused with the alternative
+named: fewer routes, `skipVerify`, or the CLI where nothing times out.
+
+**A batch is bounded, not refused.** Its ledger already makes a second call a
+resume, so it does as many targets as fit and returns `incomplete` with
+`continueBy`. Refusing it outright made the feature unreachable from the surface
+it was built for.
+
+**A browser abandoned by a killed launcher is cleared before the next one starts.**
+A session closed normally takes its browser and profile with it; a launcher killed
+outright does not, and the browser is reparented and keeps running. Each profile
+records the pid that created it, so abandonment is exact — parentage is not a
+usable signal, because a killed process's children go to whatever subreaper the
+session has rather than to init. A profile whose launcher is still alive belongs to
+another design-os and is left strictly alone.
+
 ### Reaching a clone without a shell
 
 Cloning is half the job: a clone has to be looked at and read from, and both were
@@ -586,7 +616,7 @@ Puppeteer and no Playwright; `npm test` runs 63 checks on stdlib `node:test`, in
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
 exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back
 through the served copy, and a Feature-Sliced run asserting that a slice carries the rules
-that matched it and none that did not. Total: 68 checks, including one that asserts the native and MCP surfaces are the same
+that matched it and none that did not. Total: 71 checks, including one that asserts the native and MCP surfaces are the same
 object rather than two copies of it, one that asserts a degraded capture is drawn above the
 verdict it invalidates, and one that asserts the two front ends never offer the same tool
 twice. The extension takes its config paths as an argument, so what a machine happens to

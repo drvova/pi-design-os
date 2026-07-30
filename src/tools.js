@@ -230,12 +230,30 @@ export const HANDLERS = {
  * @param {object} args tool arguments
  * @returns {Promise<object>} envelope, `ok` true or false
  */
+/**
+ * How long a tool call may take before its caller gives up.
+ *
+ * A request-response transport abandons a call that runs long; MCP's default is
+ * a minute. The work does not stop when that happens — the browser keeps going —
+ * and a caller that retries then has two running at once. Commands are told the
+ * budget so they can refuse work that cannot finish rather than be abandoned
+ * partway. A terminal passes nothing and is limited by nothing.
+ *
+ * `deadline: 0` from the caller opts out, for a host that does not time out.
+ */
+const TOOL_CALL_BUDGET_MS = 55_000;
+
 export async function runTool(name, args = {}) {
   const command = HANDLERS[name];
   if (!command) throw new Error(`unknown tool: {name}`.replace('{name}', name));
 
   try {
-    return await COMMANDS[command](args ?? {});
+    // Spreading the arguments over the default would let an explicit `undefined`
+    // erase it, which is easy to do by accident and silently removes the guard.
+    // A number from the caller wins, including zero; anything else does not.
+    const asked = args?.deadline;
+    const deadline = typeof asked === 'number' && Number.isFinite(asked) ? asked : TOOL_CALL_BUDGET_MS;
+    return await COMMANDS[command]({ ...(args ?? {}), deadline });
   } catch (error) {
     if (!(error instanceof CommandError)) process.stderr.write(`${error.stack ?? error}\n`);
     return fail(command, error instanceof CommandError ? error.code : 'OPERATION_FAILED', error.message);
