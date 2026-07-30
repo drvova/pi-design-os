@@ -3,14 +3,16 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Explore dozens of design directions from your coding agent. Local-first.",
+  "description": "Explore design directions from your coding agent, and read them off real sites. Local-first.",
   "license": "MIT",
   "bin": {
     "design-os": "bin/design-os.js"
   },
   "scripts": {
     "test": "node --test",
-    "directions": "node bin/design-os.js directions"
+    "directions": "node bin/design-os.js directions",
+    "inspect": "node bin/design-os.js inspect",
+    "mcp": "node bin/design-os.js mcp"
   },
   "engines": {
     "node": ">=22.13"

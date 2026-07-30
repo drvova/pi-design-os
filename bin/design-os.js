@@ -2,31 +2,47 @@
 /**
  * design-os control plane.
  *
- * Exactly one JSON envelope goes to stdout; progress goes to stderr. Exit codes
- * follow src/envelope.js so shell agents can branch on them without parsing.
+ * Parsing and dispatch only. The commands themselves live in src/commands.js so
+ * the MCP server runs the identical code path. Exactly one JSON envelope goes to
+ * stdout; progress goes to stderr. Exit codes follow src/envelope.js, so a shell
+ * agent can branch on them without parsing anything.
  */
 
-import { spawn } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { generate } from '../src/directions.js';
+import { COMMANDS } from '../src/commands.js';
 import { CommandError, EXIT, emit, fail, ok, progress, usage } from '../src/envelope.js';
-import { render } from '../src/gallery.js';
+import { serve } from '../src/mcp.js';
 
-const HELP = `design-os — explore dozens of design directions
+const HELP = `design-os — explore design directions, and read them off real sites
 
 Usage:
   design-os directions [options]
+  design-os inspect <url> [options]
+  design-os mcp
 
-Options:
-  --count <n>       directions to generate, 1-64        (default 12)
-  --seed <text>     identical seeds reproduce output    (default random)
-  --polarity <p>    light | dark | both                 (default both)
-  --out <path>      gallery destination                 (default .design-os/directions.html)
-  --open            open the gallery in the browser
+Commands:
+  directions        generate deterministic design directions and a gallery
+  inspect           load a url once and report its rendering pipeline and design
+  mcp               serve design_inspect and design_directions over MCP stdio
+
+directions options:
+  --count <n>       directions to generate, 1-64             (default 12)
+  --seed <text>     identical seeds reproduce output          (default random)
+  --polarity <p>    light | dark | both                       (default both)
+
+inspect options:
+  --wait <ms>       ceiling on waiting for network idle       (default 15000)
+  --timeout <ms>    per-operation Chrome timeout              (default 30000)
+  --screenshot      also write a PNG of the loaded page
+  --gallery         render the extracted direction as HTML
+
+shared options:
+  --out <path>      artefact destination                      (default .design-os/)
+  --open            open the result in the browser
   --help            show this message
+
+One JSON envelope goes to stdout; progress goes to stderr.
 `;
 
 const OPTIONS = {
@@ -34,63 +50,15 @@ const OPTIONS = {
   seed: { type: 'string' },
   polarity: { type: 'string' },
   out: { type: 'string' },
+  wait: { type: 'string' },
+  timeout: { type: 'string' },
+  screenshot: { type: 'boolean', default: false },
+  gallery: { type: 'boolean', default: false },
   open: { type: 'boolean', default: false },
   help: { type: 'boolean', default: false },
 };
 
-/** Opens a path with the platform's default handler. */
-function openInBrowser(target) {
-  const command =
-    process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
-  spawn(command, [target], { detached: true, stdio: 'ignore', shell: process.platform === 'win32' })
-    .unref();
-}
-
-function parseCount(raw) {
-  if (raw === undefined) return 12;
-  const count = Number(raw);
-  if (!Number.isInteger(count) || count < 1 || count > 64) {
-    throw usage(`--count must be an integer between 1 and 64, received "${raw}"`);
-  }
-  return count;
-}
-
-function parsePolarity(raw) {
-  const polarity = raw ?? 'both';
-  if (!['light', 'dark', 'both'].includes(polarity)) {
-    throw usage(`--polarity must be light, dark, or both, received "${raw}"`);
-  }
-  return polarity;
-}
-
-async function directions(values) {
-  const count = parseCount(values.count);
-  const polarity = parsePolarity(values.polarity);
-  const seed = values.seed ?? Math.random().toString(36).slice(2, 10);
-  const out = resolve(values.out ?? '.design-os/directions.html');
-
-  progress(`Generating ${count} directions from seed "${seed}"...`);
-  const generated = generate({ count, seed, polarity });
-
-  await mkdir(dirname(out), { recursive: true });
-  await writeFile(out, render(generated, { seed, title: `${count} directions` }), 'utf8');
-  progress(`Wrote ${out}`);
-
-  if (values.open) {
-    openInBrowser(out);
-    progress('Opened in browser.');
-  }
-
-  return ok('directions', {
-    count,
-    seed,
-    polarity,
-    path: out,
-    directions: generated.map(({ id, label, body, axes }) => ({ id, label, body, axes })),
-  });
-}
-
-const COMMANDS = { directions };
+const KNOWN = [...Object.keys(COMMANDS), 'mcp'];
 
 async function main(argv) {
   let parsed;
@@ -100,19 +68,20 @@ async function main(argv) {
     throw usage(error.message);
   }
 
-  const [command] = parsed.positionals;
+  const [command, target] = parsed.positionals;
 
   if (parsed.values.help || !command) {
     process.stderr.write(HELP);
-    return emit(ok('help', { commands: Object.keys(COMMANDS) }));
+    return emit(ok('help', { commands: KNOWN }));
   }
+
+  // A transport, not a command: it owns stdout for the whole session.
+  if (command === 'mcp') return serve();
 
   const handler = COMMANDS[command];
-  if (!handler) {
-    throw usage(`unknown command "${command}". Known commands: ${Object.keys(COMMANDS).join(', ')}`);
-  }
+  if (!handler) throw usage(`unknown command "${command}". Known commands: ${KNOWN.join(', ')}`);
 
-  return emit(await handler(parsed.values));
+  return emit(await handler({ ...parsed.values, url: target }));
 }
 
 try {
@@ -121,7 +90,7 @@ try {
   if (error instanceof CommandError) {
     process.exitCode = emit(fail('design-os', error.code, error.message));
   } else {
-    process.exitCode = emit(fail('design-os', 'OPERATION_FAILED', error.message));
+    emit(fail('design-os', 'OPERATION_FAILED', error.message));
     progress(error.stack ?? String(error));
     process.exitCode = EXIT.OPERATION_FAILED;
   }

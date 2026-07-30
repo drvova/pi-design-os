@@ -22,6 +22,37 @@ function linearToGamma(x) {
   return x <= 0.0031308 ? 12.92 * x : 1.055 * Math.pow(x, 1 / 2.4) - 0.055;
 }
 
+function gammaToLinear(x) {
+  return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+}
+
+/**
+ * 8-bit sRGB to OKLCH. The inverse of `oklchToLinearSrgb`, on the same Ottosson
+ * constants, so a colour read off a rendered page lands in the coordinate space
+ * generated directions already use and can be compared against them directly.
+ *
+ * @param {number} r 0-255
+ * @param {number} g 0-255
+ * @param {number} b 0-255
+ * @returns {{l:number,c:number,h:number}} hue in degrees, 0-360
+ */
+export function fromRgb(r, g, b) {
+  const lr = gammaToLinear(r / 255);
+  const lg = gammaToLinear(g / 255);
+  const lb = gammaToLinear(b / 255);
+
+  const lRoot = Math.cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb);
+  const mRoot = Math.cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb);
+  const sRoot = Math.cbrt(0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb);
+
+  const l = 0.2104542553 * lRoot + 0.793617785 * mRoot - 0.0040720468 * sRoot;
+  const a = 1.9779984951 * lRoot - 2.428592205 * mRoot + 0.4505937099 * sRoot;
+  const b2 = 0.0259040371 * lRoot + 0.7827717662 * mRoot - 0.808675766 * sRoot;
+
+  const hue = (Math.atan2(b2, a) / DEG_TO_RAD + 360) % 360;
+  return { l, c: Math.hypot(a, b2), h: hue };
+}
+
 /** OKLCH to linear-light sRGB. Channels may fall outside [0,1] when out of gamut. */
 function oklchToLinearSrgb(l, c, h) {
   const a = c * Math.cos(h * DEG_TO_RAD);

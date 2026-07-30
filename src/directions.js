@@ -32,26 +32,26 @@ function hashSeed(text) {
   return h >>> 0;
 }
 
-const TONES = [
+export const TONES = [
   { name: 'Muted', intensity: 34 },
   { name: 'Balanced', intensity: 62 },
   { name: 'Vivid', intensity: 92 },
 ];
 
-const SHAPES = [
+export const SHAPES = [
   { name: 'Sharp', radius: [0, 0, 0], pill: '0' },
   { name: 'Soft', radius: [0.125, 0.25, 0.375], pill: '9999px' },
   { name: 'Round', radius: [0.375, 0.625, 0.875], pill: '9999px' },
   { name: 'Pill', radius: [0.5, 1, 1.75], pill: '9999px' },
 ];
 
-const DENSITIES = [
+export const DENSITIES = [
   { name: 'Tight', unit: 0.2, lead: 1.35 },
   { name: 'Even', unit: 0.28, lead: 1.5 },
   { name: 'Airy', unit: 0.4, lead: 1.7 },
 ];
 
-const TYPEFACES = [
+export const TYPEFACES = [
   {
     name: 'System',
     sans: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
@@ -82,13 +82,13 @@ const TYPEFACES = [
   },
 ];
 
-const MOTIONS = [
+export const MOTIONS = [
   { name: 'Still', duration: '0ms', ease: 'linear', lift: '0' },
   { name: 'Calm', duration: '180ms', ease: 'cubic-bezier(0.4, 0, 0.2, 1)', lift: '-1px' },
   { name: 'Springy', duration: '320ms', ease: 'cubic-bezier(0.34, 1.56, 0.64, 1)', lift: '-3px' },
 ];
 
-const POLARITIES = [
+export const POLARITIES = [
   { name: 'Light', surfaceL: 0.97, canvasL: 0.99 },
   { name: 'Dark', surfaceL: 0.21, canvasL: 0.15 },
 ];
@@ -100,7 +100,7 @@ const HUE_NAMES = [
   [310, 'Violet'], [345, 'Magenta'], [360, 'Crimson'],
 ];
 
-function hueName(hue) {
+export function hueName(hue) {
   return HUE_NAMES.find(([bound]) => hue < bound)[1];
 }
 
@@ -109,7 +109,7 @@ function pick(list, random) {
 }
 
 /** Builds the CSS custom properties for one direction. */
-function tokensFor({ hue, tone, shape, density, typeface, motion, polarity }) {
+export function tokensFor({ hue, tone, shape, density, typeface, motion, polarity }) {
   const ramp = scale(polarity.name === 'Dark' ? 0.62 : 0.55, tone.intensity, hue);
   const byStep = Object.fromEntries(ramp.map((s) => [s.step, s]));
   const accent = polarity.name === 'Dark' ? byStep[300] : byStep[700];

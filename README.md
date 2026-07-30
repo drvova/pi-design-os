@@ -5,8 +5,8 @@ Explore dozens of design directions from your coding agent. Local-first.
 A local-first rebuild of [Rivet](https://tryrivet.design) — same shape, no server-side
 worker pool, no auth, no metering.
 
-Status: **direction engine and gallery work.** Project attachment, variant worktrees,
-and the MCP server are not built yet.
+Status: **direction engine, site inspection, gallery and MCP server work.** Project
+attachment and variant worktrees are not built yet.
 
 ---
 
@@ -14,6 +14,8 @@ and the MCP server are not built yet.
 
 ```bash
 node bin/design-os.js directions --count 24 --seed monozukuri --open
+node bin/design-os.js inspect stripe.com --screenshot --gallery --open
+node bin/design-os.js mcp
 ```
 
 | Flag | Default | Meaning |
@@ -21,8 +23,12 @@ node bin/design-os.js directions --count 24 --seed monozukuri --open
 | `--count <n>` | `12` | directions to generate, 1-64 |
 | `--seed <text>` | random | identical seeds reproduce identical output |
 | `--polarity <p>` | `both` | `light`, `dark`, or `both` |
-| `--out <path>` | `.design-os/directions.html` | gallery destination |
-| `--open` | off | open the gallery in the browser |
+| `--wait <ms>` | `15000` | ceiling on waiting for network idle |
+| `--timeout <ms>` | `30000` | per-operation Chrome timeout |
+| `--screenshot` | off | also write a PNG of the loaded page |
+| `--gallery` | off | render the extracted direction as HTML |
+| `--out <path>` | `.design-os/` | artefact destination |
+| `--open` | off | open the result in the browser |
 
 One JSON envelope goes to stdout; progress goes to stderr.
 
@@ -33,6 +39,50 @@ One JSON envelope goes to stdout; progress goes to stderr.
 
 Exit codes: `0` ok, `1` operation failed, `2` usage error, `3` auth required,
 `4` server unavailable, `5` wait timeout (not a failure).
+
+## What `inspect` reads
+
+One navigation answers everything. Loading twice measures two different pages: caches
+warm, A/B branches flip, and lazy work that ran the first time does not run the second.
+
+Instrumentation is installed with `Page.addScriptToEvaluateOnNewDocument`, so it is in
+place while `readyState` is still `loading` and before `document.body` exists. Wrapping an
+API after the page's own scripts have run measures nothing. Every call is bucketed by
+`readyState` at the moment it happens, which is the platform's own answer to "which phase
+is this" and cannot drift from it.
+
+| Phase | `readyState` | Reported as |
+| --- | --- | --- |
+| Parser running, no DOM yet | `loading` | `preDom`, `beforeDomContentLoaded` |
+| DOMContentLoaded fired | `interactive` | `afterDomContentLoaded` |
+| Load fired | `complete` | `afterDomContentLoaded` |
+
+| Section | Answers |
+| --- | --- |
+| `preDom` | resource hints, render-blocking sheets, parser-blocking scripts, inline bytes — the authored head, in source order |
+| `beforeDomContentLoaded` | requests, bytes, API calls and DOM mutations while the parser was still running |
+| `afterDomContentLoaded` | hydration, lazy loading, and styling applied after the DOM existed |
+| `assets` | every request in order, with type, initiator, protocol, bytes, cache state and phase |
+| `browserApis` | which APIs were called, how often, in which phase, and at what millisecond first |
+| `domMutations` | elements added and removed, attributes changed, text edits, split by phase |
+| `styling` | static CSS counted against runtime style writes, with a verdict |
+| `runtime` | lifecycle trace, listener types, layout shape, page errors |
+| `direction` | the rendered design as a design-os direction, plus every raw reading |
+
+The styling verdict is the split the question turns on. Stylesheet declaration blocks are
+counted against runtime style writes: `css` under 5% dynamic, `css-led` under 30%, `mixed`
+under 70%, `javascript` above it. A Tailwind site lands at `0.005`; a styled-components
+site lands at `0.66`, because CSS-in-JS writes its rules through `insertRule` at runtime.
+
+Design tokens are read out of stylesheet text rather than the CSSOM: `getComputedStyle`
+does not enumerate custom properties in Chrome, and `cssRules` throws on a cross-origin
+sheet. Names come from the text the CSS domain already returned, then each is resolved by
+name against `:root`, so the value recorded is the one that applies after `var()`.
+
+An inspected site comes back as a direction built by the same `tokensFor` that generated
+directions use, so it renders in the same gallery and can be compared against them
+directly. Snapping to shared axes is what makes a site comparable; the raw reading is
+carried through untouched beside it, because that is what makes it truthful.
 
 ## How the engine works
 
@@ -54,16 +104,40 @@ Copying reads the **authored** markup, never `innerHTML`. The DOM uncloses void 
 and expands `checked` to `checked=""`; both forms are invalid JSX.
 
 ```
-src/oklch.js       colour maths, gamut boundary, 9-step scales
+src/oklch.js       colour maths, gamut boundary, 9-step scales, sRGB -> OKLCH
 src/directions.js  seeded axis draws -> token sets
 src/components.js  the component set and its stylesheet
 src/jsx.js         HTML -> JSX attribute rewriting, shared with the page
 src/gallery.js     one self-contained HTML document
+src/cdp.js         Chrome launch and DevTools Protocol client
+src/probe.js       browser-side sources: pre-document probe, post-load harvest
+src/inspect.js     one page load -> the whole pipeline
+src/extract.js     rendered page -> design direction
+src/commands.js    command implementations, shared by CLI and MCP
+src/mcp.js         MCP stdio server
 src/envelope.js    wire contract and exit codes
 bin/design-os.js   CLI
 ```
 
-Zero runtime dependencies. `npm test` runs 15 checks on stdlib `node:test`.
+Zero runtime dependencies. Node 22 ships a global `WebSocket`, so driving Chrome needs no
+Puppeteer and no Playwright; `npm test` runs 28 checks on stdlib `node:test`, including a
+full pipeline read off a local fixture served over `node:http`.
+
+## MCP
+
+`design-os mcp` speaks line-delimited JSON-RPC 2.0 on stdio, protocol `2025-06-18`.
+
+| Tool | Purpose |
+| --- | --- |
+| `design_inspect` | Load a url once and report its rendering pipeline and its design. |
+| `design_directions` | Generate deterministic directions and write a gallery. |
+
+Both call `src/commands.js`, the same entry point the CLI uses, so a tool call and a shell
+invocation cannot drift apart. Each result carries the CLI's envelope verbatim. The spec
+requires that stdout carry MCP messages and nothing else, which is why the server never
+calls `emit`; commands already send progress to stderr, so the message stream is safe by
+construction. Work that fails comes back as a result with `isError` carrying the failure
+envelope — protocol errors are reserved for messages the server could not understand.
 
 ## Prior art — Rivet, verified 2026-07-25
 
@@ -82,12 +156,12 @@ Rivet, Inc. — npm [`rivet-design`](https://www.npmjs.com/package/rivet-design)
 
 | Concern | Rivet | design-os |
 | --- | --- | --- |
-| MCP | `@modelcontextprotocol/sdk`, stdio | same, planned |
+| MCP | `@modelcontextprotocol/sdk`, stdio | own stdio server, no dependency |
 | Dev-server proxy | `express` + `http-proxy-middleware`, `:3000` to `:4000` | same, planned |
 | Generation | server-side workers behind `rivet login` | deterministic locally; agent SDK only for layout |
 | Variant isolation | `simple-git` branch per variant | `git worktree` per variant |
 | Queue | `redis` | in-process |
-| URL capture | own render service | `chrome-devtools-mcp` |
+| URL capture | own render service | own CDP client over the Node 22 global `WebSocket` |
 | Telemetry | `posthog-node`, `@sentry/node` | none |
 
 Framework detection: Next.js, Vite, CRA, Remix, SvelteKit, Static HTML.
@@ -126,10 +200,10 @@ Decision 4 is what makes a run instant and free where Rivet's is metered and tak
 
 ## Next
 
-- `open` — framework detection, dev-server attach, proxy
+- `open` — dev-server attach and proxy
 - `variants start|status|commit` over `git worktree`
-- `design-os mcp serve` — three tools over the same envelope
 
 ## Requirements
 
-Node >= 22.13.
+Node >= 22.13, for the global `WebSocket`. `inspect` also needs Chrome or Chromium;
+set `CHROME_PATH` if it is not on the usual path.
