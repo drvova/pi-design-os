@@ -11,6 +11,7 @@ Three tools, all backed by one headless-Chrome load per route.
 | --- | --- |
 | `design_inspect` | "how is this site built", "what does it use", "read the design off this" |
 | `design_clone` | "clone it", "copy it", "extract the components", "rebuild this" |
+| `design_batch` | "clone all of these", "run it over this list", a file of sites |
 | `design_serve` | "let me see it", "open the clone", "show me in the browser" |
 | `design_slices` | "what components did it find", "show me the button", "that card's css" |
 | `design_directions` | "give me design directions", "explore some palettes" |
@@ -92,6 +93,18 @@ reading of the design, not a second clone.
 Languages are usually separate routes, so `routes` reaches them. A language or
 menu that only changes state without changing the url is not captured — say so
 rather than implying it was.
+
+## Cloning many sites
+
+For more than a handful, write the targets to a file and use `design_batch`
+rather than calling `design_clone` in a loop: it records progress after every
+target, so an interrupted run resumes instead of starting again.
+
+Report `cloned`, `skipped` and `failed` separately, and pass through the reason
+on any failed row. A second call on the same list is a resume, not a repeat.
+
+Warn the user about the cost before starting a long one: each target is a real
+browser load, so roughly 20 to 40 seconds per site, sequentially.
 
 ## After a clone
 

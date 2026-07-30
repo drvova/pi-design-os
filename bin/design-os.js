@@ -20,13 +20,15 @@ Usage:
   design-os directions [options]
   design-os inspect <url> [options]
   design-os clone <url> [options]
+  design-os batch --from <file> [options]
   design-os mcp
 
 Commands:
   directions        generate deterministic design directions and a gallery
   inspect           load a url once and report its rendering pipeline and design
   clone             copy a url, or crawl a site, then load it back and score it
-  mcp               serve the three tools over MCP stdio
+  batch             clone every target in a list file, resumably
+  mcp               serve every tool over MCP stdio
 
 directions options:
   --count <n>       directions to generate, 1-64             (default 12)
@@ -39,6 +41,11 @@ inspect and clone options:
   --modes <list>    also read the design in dark and/or light
   --screenshot      also write a PNG of the loaded page
   --gallery         render the extracted direction as HTML    (inspect)
+
+batch options:
+  --from <file>     one url or hostname per line, # for comments
+  --ledger <path>   progress record        (default .design-os/batch-<name>.json)
+  --retry           re-clone targets already recorded as done
 
 clone options:
   --routes <n>      routes to crawl breadth-first from the url    (default 1)
@@ -64,6 +71,9 @@ const OPTIONS = {
   timeout: { type: 'string' },
   budget: { type: 'string' },
   routes: { type: 'string' },
+  from: { type: 'string' },
+  ledger: { type: 'string' },
+  retry: { type: 'boolean', default: false },
   modes: { type: 'string' },
   layout: { type: 'string' },
   screenshot: { type: 'boolean', default: false },

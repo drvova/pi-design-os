@@ -387,6 +387,39 @@ language chosen from a dropdown that never changes the url is not reachable this
 way, and neither is a menu that has to be opened: those are interaction, not a
 second design.
 
+### Cloning a list
+
+```
+design_batch { from: "sites.txt", routes: 2, layout: "fsd" }
+```
+
+One url or hostname per line, `#` starts a comment, duplicates are collapsed —
+a browser launch per repeated host is minutes spent for nothing. Every option
+`design_clone` takes applies to each target.
+
+Sequential on purpose. Each clone drives its own browser, and running several at
+once is what left stray Chrome profiles behind during development; a steady pass
+finishes sooner than a contended one and is far easier to reason about when a
+single site misbehaves.
+
+Two properties matter more than speed for a run measured in hours:
+
+- **A failure is recorded, not raised.** One unreachable host must not discard
+  the fifty clones before it. Its row carries the wire code and the message.
+- **The ledger is written after every target.** A run that is interrupted resumes
+  where it stopped. Re-running is a resume: what succeeded is skipped, what failed
+  is tried again, since a failure is usually the network rather than the target.
+  `retry` re-clones everything.
+
+```
+[1/2] example.com
+[2/2] ftp://not-a-website — failed: only http and https are supported, got ftp:
+1 cloned, 0 already done, 1 failed — ledger at .design-os/batch-sites.json
+```
+
+The returned rows are summaries — fidelity, routes, slices, assets, the clone and
+report paths. The full report for each target is on disk.
+
 ### Reaching a clone without a shell
 
 Cloning is half the job: a clone has to be looked at and read from, and both were
@@ -553,7 +586,7 @@ Puppeteer and no Playwright; `npm test` runs 63 checks on stdlib `node:test`, in
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
 exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back
 through the served copy, and a Feature-Sliced run asserting that a slice carries the rules
-that matched it and none that did not. Total: 66 checks, including one that asserts the native and MCP surfaces are the same
+that matched it and none that did not. Total: 68 checks, including one that asserts the native and MCP surfaces are the same
 object rather than two copies of it, one that asserts a degraded capture is drawn above the
 verdict it invalidates, and one that asserts the two front ends never offer the same tool
 twice. The extension takes its config paths as an argument, so what a machine happens to
@@ -656,6 +689,7 @@ to offer a slash command, and no way to close a browser this package started.
 | Tool | Purpose |
 | --- | --- |
 | `design_inspect` | Load a url once and report its rendering pipeline and its design. |
+| `design_batch` | Clone every target in a list file, resumably. |
 | `design_serve` | Serve a clone and return its url. Registered, reused, closable. |
 | `design_slices` | List the components a clone extracted, or return one in full. |
 | `design_clone` | Copy a url, or crawl a site, then load every route back and score it. `layout: "fsd"` emits a Feature-Sliced tree with components extracted. |

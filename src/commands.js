@@ -9,7 +9,7 @@
 
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 
 import { serveClone, servedClones, stopClones } from './clone.js';
 
@@ -91,6 +91,21 @@ function colourModes(raw) {
     if (mode !== 'dark' && mode !== 'light') throw usage(`--modes takes dark or light, got "${mode}"`);
   }
   return [...new Set(asked)];
+}
+
+/**
+ * Targets from a list file: one per line, `#` starts a comment.
+ *
+ * Deduplicated, because a gallery export repeats hosts and a browser launch per
+ * duplicate is minutes wasted for nothing.
+ */
+function targetsFrom(text) {
+  const seen = new Set();
+  for (const line of text.split(/\r?\n/)) {
+    const entry = line.replace(/#.*$/, '').trim();
+    if (entry) seen.add(entry);
+  }
+  return [...seen];
 }
 
 /** Filesystem-safe stem for a url. */
@@ -322,5 +337,105 @@ export async function slices(options = {}) {
   });
 }
 
+/**
+ * Clones every target in a list file.
+ *
+ * Sequential on purpose. Each clone drives its own browser, and running several
+ * at once is what left stray Chrome profiles behind during development; a steady
+ * one-at-a-time pass finishes sooner than a contended one and is far easier to
+ * reason about when a single site misbehaves.
+ *
+ * Two properties matter more than speed for a run that takes hours. A site that
+ * fails is recorded and the pass continues, because one unreachable host should
+ * not discard the fifty clones before it. And the ledger is written after every
+ * single target, so a run that is interrupted resumes where it stopped rather
+ * than starting again.
+ */
+export async function batch(options = {}) {
+  if (!options.from) throw usage('batch needs a list of targets, e.g. design-os batch --from sites.txt');
+
+  const listPath = resolve(options.from);
+  const listed = await readFile(listPath, 'utf8').catch(() => null);
+  if (listed === null) throw usage(`cannot read ${listPath}`);
+
+  const targets = targetsFrom(listed);
+  if (targets.length === 0) throw usage(`${listPath} has no targets; one url or hostname per line`);
+
+  const stem = basename(listPath, extname(listPath)).replace(/[^a-z0-9]+/gi, '-') || 'batch';
+  const ledgerPath = resolve(options.ledger ?? `${WORKSPACE}/batch-${stem}.json`);
+  const previous = JSON.parse((await readFile(ledgerPath, 'utf8').catch(() => 'null')) ?? 'null') ?? {};
+  const rows = { ...(previous.rows ?? {}) };
+
+  const passthrough = { ...options };
+  delete passthrough.from;
+  delete passthrough.ledger;
+  delete passthrough.retry;
+  delete passthrough.out;
+
+  let cloned = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (const [index, target] of targets.entries()) {
+    const position = `[${index + 1}/${targets.length}]`;
+
+    if (rows[target]?.ok && !options.retry) {
+      skipped += 1;
+      progress(`${position} ${target} — already done, skipping`);
+      continue;
+    }
+
+    progress(`${position} ${target}`);
+    try {
+      const envelope = await clone({ ...passthrough, url: target });
+      const data = envelope.data;
+      rows[target] = {
+        ok: true,
+        at: new Date().toISOString(),
+        finalUrl: data.finalUrl,
+        stack: data.stack,
+        routes: data.site.cloned,
+        discovered: data.site.discovered,
+        slices: data.site.slices?.length ?? 0,
+        assets: data.site.assets.unique,
+        fidelity: data.fidelity?.score ?? null,
+        lowest: data.fidelity?.lowest ?? null,
+        degraded: data.capture.degraded,
+        clone: data.artefacts.clone,
+        report: data.artefacts.report,
+      };
+      cloned += 1;
+    } catch (error) {
+      // Recorded, not thrown: fifty good clones must survive one bad host.
+      rows[target] = { ok: false, at: new Date().toISOString(), error: error.message, code: error.code ?? 'OPERATION_FAILED' };
+      failed += 1;
+      progress(`${position} ${target} — failed: ${error.message}`);
+    }
+
+    // After every target, so an interrupted run resumes instead of restarting.
+    await write(ledgerPath, JSON.stringify({ from: listPath, updated: new Date().toISOString(), rows }, null, 2));
+  }
+
+  progress(`${cloned} cloned, ${skipped} already done, ${failed} failed — ledger at ${ledgerPath}`);
+
+  const scored = Object.values(rows).filter((row) => row.ok && typeof row.fidelity === 'number');
+  return ok('batch', {
+    from: listPath,
+    ledger: ledgerPath,
+    targets: targets.length,
+    cloned,
+    skipped,
+    failed,
+    fidelity: scored.length
+      ? {
+          lowest: Math.min(...scored.map((row) => row.fidelity)),
+          exact: scored.filter((row) => row.fidelity === 1).length,
+          of: scored.length,
+        }
+      : null,
+    rows: Object.fromEntries(targets.map((target) => [target, rows[target] ?? null])),
+  });
+}
+
 /** Every command the CLI and the MCP server expose. */
-export const COMMANDS = { directions, inspect, clone, serve, slices };
+export const COMMANDS = { directions, inspect, clone, serve, slices, batch };

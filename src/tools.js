@@ -120,6 +120,36 @@ export const TOOLS = [
     },
   },
   {
+    name: 'design_batch',
+    title: 'Clone every site in a list',
+    description:
+      'Clones every target in a list file, one url or hostname per line with # for comments. Sequential on purpose: each ' +
+      'clone drives its own browser. A site that fails is recorded and the pass continues, and a ledger is written after ' +
+      'every target so an interrupted run resumes where it stopped instead of starting again. Takes the same options as ' +
+      'design_clone and applies them to each target. Returns one summary row per site plus the ledger path; the full ' +
+      'report for each is on disk.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Path to the list file. One url or hostname per line; # starts a comment.' },
+        ledger: { type: 'string', description: 'Where to record progress. Defaults to .design-os/batch-<list name>.json.' },
+        retry: {
+          type: 'boolean',
+          description: 'Re-clone targets already recorded as done. Off by default, which is what makes a re-run a resume.',
+          default: false,
+        },
+        routes: { type: 'integer', minimum: 1, maximum: 200, default: 1 },
+        layout: { type: 'string', enum: ['flat', 'fsd'], default: 'flat' },
+        modes: { type: 'array', items: { type: 'string', enum: ['dark', 'light'] }, default: [] },
+        budget: { type: 'integer', minimum: 1, maximum: 2048, default: 40 },
+        scripts: { type: 'boolean', default: false },
+        skipVerify: { type: 'boolean', default: false },
+        wait: { type: 'integer', minimum: 500, maximum: 120000, default: 15000 },
+      },
+      required: ['from'],
+    },
+  },
+  {
     name: 'design_serve',
     title: 'Serve a clone and return its url',
     description:
@@ -183,6 +213,7 @@ export const TOOLS = [
 export const HANDLERS = {
   design_inspect: 'inspect',
   design_clone: 'clone',
+  design_batch: 'batch',
   design_serve: 'serve',
   design_slices: 'slices',
   design_directions: 'directions',
