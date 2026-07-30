@@ -29,7 +29,7 @@ import {
 } from './clone.js';
 import { progress } from './envelope.js';
 import { inspectPage, normaliseUrl } from './inspect.js';
-import { writeDevProject } from './project.js';
+import { buildProject, writeDevProject } from './project.js';
 import { writeAppStyles, writeEntry, writeManifest, writeReadme, writeVariantTokens } from './slices.js';
 
 /** Linked, but never a page: following these wastes a browser launch. */
@@ -103,6 +103,7 @@ export async function cloneSite({
   verify = true,
   layout = 'flat',
   vite = true,
+  build = false,
   modes = [],
 }) {
   const entry = normaliseUrl(url);
@@ -241,6 +242,17 @@ export async function cloneSite({
   const project = vite
     ? await writeDevProject(dir, { name: hostOf(entry), routes: manifest.routes, mirror: scripts })
     : { written: false, reason: 'not requested' };
+  // Built in place, so the source stays the thing you edit and dist/ is the thing
+  // you serve. Both, never one instead of the other.
+  if (build && project.written) {
+    progress('Installing and building the clone…');
+    project.built = await buildProject(dir);
+    progress(
+      project.built.ok
+        ? `Built ${project.built.pages} page(s) into ${project.built.dist} with ${project.built.manager}, ${Math.round(project.built.bytes / 1024)}KB`
+        : `Build failed at ${project.built.step ?? 'start'}: ${project.built.reason}`,
+    );
+  }
   manifest.project = project;
 
   if (layout === 'fsd') {

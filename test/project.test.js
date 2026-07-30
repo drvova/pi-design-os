@@ -7,7 +7,7 @@ import test from 'node:test';
 
 import { chromePath } from '../src/cdp.js';
 import { COMMANDS } from '../src/commands.js';
-import { devProjectNotes, writeDevProject } from '../src/project.js';
+import { buildProject, devProjectNotes, writeDevProject } from '../src/project.js';
 
 const HOME = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Home</title><style>
   body { background: #101018; color: #eee; font-family: sans-serif; margin: 0 }
@@ -56,6 +56,49 @@ test('a clone becomes a project whose every build entry is a real file', async (
       assert.match(name, /^[a-z0-9-]+$/, `${name} must be usable as an output name`);
     }
     assert.ok(Object.values(input).includes('index.html'), 'a build with no front door is not openable');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('building leaves the source in place, and says where both are', async (t) => {
+  // The build needs a package manager and a network for its one dependency.
+  // Absent either, there is nothing to assert about and nothing broken.
+  const manager = await Promise.all(['bun', 'npm'].map(async (name) => {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    return promisify(execFile)(name, ['--version']).then(() => name).catch(() => null);
+  })).then((found) => found.find(Boolean));
+  if (!manager) {
+    t.skip('no package manager on this machine');
+    return;
+  }
+
+  const root = await mkdtemp(join(tmpdir(), 'design-os-build-'));
+  try {
+    // Nothing to build without a project, and that has to be said plainly rather
+    // than failing somewhere inside a package manager.
+    await assert.rejects(() => buildProject(root), /no package.json/);
+
+    const routes = [{ path: 'pages/home/ui/index.html' }];
+    await mkdir(join(root, 'pages/home/ui'), { recursive: true });
+    await writeFile(join(root, 'pages/home/ui/index.html'), HOME, 'utf8');
+    await writeFile(join(root, 'index.html'), HOME, 'utf8');
+    await writeDevProject(root, { name: 'example.com', routes });
+
+    const built = await buildProject(root, { manager });
+    assert.equal(built.ok, true, `build failed: ${built.reason ?? ''}`);
+    assert.equal(built.pages, 2, 'the route and the entry');
+    assert.ok(built.bytes > 0, 'a build that emits nothing is not a build');
+
+    // The whole point: both exist afterwards.
+    await access(join(root, 'dist/pages/home/ui/index.html'));
+    await access(join(root, 'pages/home/ui/index.html'));
+    const source = await readFile(join(root, 'pages/home/ui/index.html'), 'utf8');
+    assert.equal(source, HOME, 'the source must be exactly what it was');
+
+    // Building twice is ordinary, not an error.
+    assert.equal((await buildProject(root, { manager })).ok, true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

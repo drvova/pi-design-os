@@ -106,6 +106,12 @@ cd <clone dir> && npm install && npm run dev     # or bun
 `vite: false` if the two extra files are unwanted. A mirror clone (`scripts:
 true`) reports `project.written: false`; serve that one, do not try to build it.
 
+For built output, call `design_build` with the clone directory or the site name.
+It leaves the source alone, so report both paths back: `dist` to serve, `edit` to
+change. Do not pass `build: true` to `design_clone` over a tool call — a clone
+plus an install does not fit one call, and the refusal will tell you the same.
+Building twice is ordinary, not an error.
+
 ## Cost, and what will be refused
 
 A tool call has a deadline; roughly thirty seconds per route is the estimate. Ask

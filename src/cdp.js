@@ -48,7 +48,7 @@ const PROFILE_PREFIX = 'design-os-chrome-';
  * if that pid is gone, whatever is still holding the profile has nobody left to
  * talk to.
  */
-const LAUNCHER_FILE = '.design-os-launcher';
+export const LAUNCHER_FILE = '.design-os-launcher';
 
 const alive = (pid) => {
   try {

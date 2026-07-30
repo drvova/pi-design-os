@@ -13,8 +13,10 @@
  * is installed by cloning; you run the install in the clone when you want it.
  */
 
-import { writeFile } from 'node:fs/promises';
-import { join, posix } from 'node:path';
+import { spawn } from 'node:child_process';
+import { access, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { join, posix, relative } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 /**
  * Measured against Vite 8.2.0, whose own engine requirement is Node 20.19+.
@@ -105,6 +107,116 @@ ${Object.entries(input)
   await writeFile(join(root, 'vite.config.js'), config, 'utf8');
 
   return { written: true, pages: Object.keys(input).length, scripts: Object.keys(manifest.scripts), vite: VITE_RANGE };
+}
+
+/**
+ * Package managers worth trying, fastest first.
+ *
+ * Bun installs the same tree in a fraction of the time and runs the same
+ * scripts, so it is preferred when present. Nothing here is bun-specific: the
+ * project it builds has no lockfile of its own, so either manager resolves it.
+ */
+const MANAGERS = ['bun', 'npm'];
+
+function execute(command, args, cwd) {
+  return new Promise((settled) => {
+    const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (chunk) => {
+      out += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      err += chunk;
+    });
+    child.on('error', (error) => settled({ code: null, out, err: error.message }));
+    child.on('close', (code) => settled({ code, out, err }));
+  });
+}
+
+async function available(manager) {
+  const { code } = await execute(manager, ['--version'], process.cwd());
+  return code === 0;
+}
+
+/** Bytes on disk under a directory, so a build can report its own weight. */
+async function weigh(dir) {
+  let bytes = 0;
+  const walk = async (at) => {
+    for (const entry of await readdir(at, { withFileTypes: true }).catch(() => [])) {
+      const path = join(at, entry.name);
+      if (entry.isDirectory()) await walk(path);
+      else bytes += await stat(path).then((info) => info.size).catch(() => 0);
+    }
+  };
+  await walk(dir);
+  return bytes;
+}
+
+/**
+ * Installs the project's dependencies and builds it, leaving the source alone.
+ *
+ * The point of building in place is that both exist afterwards: `dist/` is
+ * servable and the pages beside it are still the ones you edit. A build is never
+ * substituted for the copy.
+ *
+ * This is the one part of design-os that reaches the network for something other
+ * than the site being cloned, since a build needs its bundler installed. It is
+ * therefore asked for rather than assumed, and a failure is reported as a failed
+ * build of a clone that is otherwise complete.
+ */
+export async function buildProject(root, { manager } = {}) {
+  await access(join(root, 'package.json')).catch(() => {
+    throw new Error(
+      `${root} has no package.json, so there is nothing to build. Clone without \`vite: false\`, ` +
+        'or serve it as it is — the pages are already static.',
+    );
+  });
+
+  const chosen = manager ?? (await MANAGERS.reduce(async (found, next) => (await found) || ((await available(next)) ? next : null), Promise.resolve(null)));
+  if (!chosen) return { ok: false, reason: `no package manager found; tried ${MANAGERS.join(' and ')}` };
+
+  const installed = await execute(chosen, ['install'], root);
+  if (installed.code !== 0) {
+    return {
+      ok: false,
+      manager: chosen,
+      step: 'install',
+      // The tail, because a failing install says why in its last few lines.
+      reason: (installed.err || installed.out).trim().split('\n').slice(-4).join(' ').slice(0, 400),
+    };
+  }
+
+  const built = await execute(chosen, ['run', 'build'], root);
+  if (built.code !== 0) {
+    return {
+      ok: false,
+      manager: chosen,
+      step: 'build',
+      reason: (built.err || built.out).trim().split('\n').slice(-6).join(' ').slice(0, 500),
+    };
+  }
+
+  // A build that exits zero having emitted nothing is not a build. Every entry
+  // the config names has to have produced a file.
+  const config = (await import(`${pathToFileURL(join(root, 'vite.config.js')).href}?read=${Date.now()}`)).default;
+  const expected = Object.values(config?.build?.rollupOptions?.input ?? {});
+  const dist = join(root, 'dist');
+  const missing = [];
+  for (const page of expected) {
+    await access(join(dist, page)).catch(() => missing.push(page));
+  }
+  if (missing.length > 0) {
+    return { ok: false, manager: chosen, step: 'build', reason: `built without emitting ${missing.join(', ')}` };
+  }
+
+  return {
+    ok: true,
+    manager: chosen,
+    dist: relative(root, dist) || 'dist',
+    pages: expected.length,
+    bytes: await weigh(dist),
+  };
 }
 
 /** The lines a README needs so the project is obvious without reading the config. */

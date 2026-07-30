@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { readdir, rm, writeFile, mkdtemp } from 'node:fs/promises';
+import { readFile, readdir, rm, writeFile, mkdtemp } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { chromePath, reapOrphans } from '../src/cdp.js';
+import { LAUNCHER_FILE, chromePath, reapOrphans } from '../src/cdp.js';
 import { runTool } from '../src/tools.js';
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><style>
@@ -98,7 +98,6 @@ test('a browser abandoned by a killed launcher is cleared, not left running', as
       `await openPage();\nprocess.stdout.write('open\\n');\nawait new Promise(() => {});\n`,
   );
 
-  const before = await profiles();
   const child = spawn(process.execPath, [script], { stdio: ['ignore', 'pipe', 'ignore'] });
 
   try {
@@ -112,23 +111,22 @@ test('a browser abandoned by a killed launcher is cleared, not left running', as
       });
     });
 
-    const during = await profiles();
-    assert.ok(during.length > before.length, 'a profile should exist while the browser is open');
+    // Found by the pid recorded inside it, not by diffing the directory. Another
+    // test file running in parallel creates profiles of its own, and a diff of a
+    // shared listing then attributes someone else's profile to this test.
+    let mine = null;
+    for (const name of await profiles()) {
+      const owner = await readFile(join(tmpdir(), name, LAUNCHER_FILE), 'utf8').catch(() => '');
+      if (Number(owner.trim()) === child.pid) mine = name;
+    }
+    assert.ok(mine, `no profile records the child pid ${child.pid}`);
 
     // Killed outright: no finally block runs, nothing is closed.
     child.kill('SIGKILL');
     await new Promise((settle) => setTimeout(settle, 2500));
 
-    // Assert on this test's own profile, not on global counts: another design-os
-    // may legitimately be running, and its profile is correctly skipped.
-    const abandoned = during.filter((entry) => !before.includes(entry));
-    assert.equal(abandoned.length, 1, `expected one new profile, saw ${abandoned.length}`);
-
     await reapOrphans();
-    assert.ok(
-      !(await profiles()).includes(abandoned[0]),
-      `the abandoned profile ${abandoned[0]} was left behind`,
-    );
+    assert.ok(!(await profiles()).includes(mine), `the abandoned profile ${mine} was left behind`);
 
     // Reaping again finds nothing more of ours to do.
     const again = await reapOrphans();

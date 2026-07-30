@@ -449,6 +449,31 @@ all four pages in 204ms.
 Vite is declared as the clone's dependency, never design-os's, so cloning
 installs nothing. `--no-vite` skips the two files.
 
+### Built and editable, not one instead of the other
+
+`--build` installs and builds the clone as part of taking it, and `design_build`
+does the same to a clone already on disk. Either way the source is untouched:
+afterwards there is a `dist/` to serve and the same pages to edit.
+
+```sh
+design-os clone vuejs.org --routes 2 --layout fsd --build
+design-os build vuejs.org        # or later, on a clone already taken
+```
+
+Bun is preferred when present and npm is used otherwise; the report says which
+ran. A build is asked for rather than assumed, because installing is the one
+thing design-os does that reaches the network for something other than the site
+being cloned, and a clone should not quietly depend on that. A failed build is
+reported as a failed build of a copy that is otherwise complete.
+
+A build that exits zero having emitted nothing is not a build, so every entry the
+config names is checked for a file afterwards. On a two-route clone of vuejs.org
+the built output scores a fidelity of **1** against the same clone served as
+source, with no failed requests on either.
+
+Over a tool call, clone first and then build: each fits inside a caller's window
+where the two together do not, and the refusal says so.
+
 A mirror clone declines the project instead of half-serving it: a mirror runs the
 site's own scripts, and a dev server would try to rebuild a production bundle it
 did not produce, on urls that loader constructs at runtime. Serve a mirror over
@@ -650,7 +675,7 @@ Puppeteer and no Playwright; `npm test` runs 63 checks on stdlib `node:test`, in
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
 exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back
 through the served copy, and a Feature-Sliced run asserting that a slice carries the rules
-that matched it and none that did not. Total: 74 checks, including one that asserts the native and MCP surfaces are the same
+that matched it and none that did not. Total: 75 checks, including one that asserts the native and MCP surfaces are the same
 object rather than two copies of it, one that asserts a degraded capture is drawn above the
 verdict it invalidates, and one that asserts the two front ends never offer the same tool
 twice. The extension takes its config paths as an argument, so what a machine happens to

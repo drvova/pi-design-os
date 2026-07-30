@@ -85,6 +85,13 @@ export const TOOLS = [
           maximum: 200,
           default: 1,
         },
+        build: {
+          type: 'boolean',
+          description:
+            'Install the clone’s dependencies and build it, leaving the source in place so there is a dist/ ' +
+            'to serve and the same pages to edit. Off by default because installing reaches the network. ' +
+            'Over a tool call, clone first and then call design_build, which fits where both together do not.',
+        },
         vite: {
           type: 'boolean',
           description:
@@ -157,6 +164,30 @@ export const TOOLS = [
     },
   },
   {
+    name: 'design_build',
+    title: 'Build a clone',
+    description:
+      'Installs a clone’s dependencies and builds it in place. Afterwards dist/ can be served and the ' +
+      'pages beside it are still the ones to edit — a build is never substituted for the copy. Point it at ' +
+      'a clone directory or the site name it was taken from. A clone taken with vite: false, or a mirror, ' +
+      'has nothing to build and says so.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dir: {
+          type: 'string',
+          description: 'The clone directory, or the site it was taken from (e.g. "stripe.com").',
+        },
+        manager: {
+          type: 'string',
+          enum: ['bun', 'npm'],
+          description: 'Which package manager to use. Chosen automatically otherwise, preferring bun.',
+        },
+      },
+      required: ['dir'],
+    },
+  },
+  {
     name: 'design_serve',
     title: 'Serve a clone and return its url',
     description:
@@ -221,6 +252,7 @@ export const HANDLERS = {
   design_inspect: 'inspect',
   design_clone: 'clone',
   design_batch: 'batch',
+  design_build: 'build',
   design_serve: 'serve',
   design_slices: 'slices',
   design_directions: 'directions',

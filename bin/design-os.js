@@ -49,6 +49,7 @@ batch options:
 
 clone options:
   --no-vite         skip the package.json and Vite config a clone normally gets
+  --build           install and build the clone too, keeping the source editable
   --routes <n>      routes to crawl breadth-first from the url    (default 1)
   --layout <l>      flat | fsd, Feature-Sliced Design tree         (default flat)
   --budget <mb>     asset size budget, lowest priority cut first  (default 40)
@@ -82,6 +83,7 @@ const OPTIONS = {
   scripts: { type: 'boolean', default: false },
   'skip-verify': { type: 'boolean', default: false },
   'no-vite': { type: 'boolean', default: false },
+  build: { type: 'boolean', default: false },
   open: { type: 'boolean', default: false },
   help: { type: 'boolean', default: false },
 };

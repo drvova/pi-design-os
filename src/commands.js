@@ -14,6 +14,7 @@ import { basename, dirname, extname, join, resolve } from 'node:path';
 import { serveClone, servedClones, stopClones } from './clone.js';
 
 import { cloneSite } from './crawl.js';
+import { buildProject } from './project.js';
 import { generate } from './directions.js';
 import { CommandError, ok, progress, usage } from './envelope.js';
 import { render } from './gallery.js';
@@ -75,10 +76,12 @@ async function exclusive(what, run) {
  * not. Work that plainly exceeds the deadline is refused here, before a browser
  * is launched, rather than being abandoned mid-flight and retried.
  */
-function withinBudget({ deadline, routes, verify, what, alternative }) {
+function withinBudget({ deadline, routes, verify, build, what, alternative }) {
   if (!deadline) return;
 
-  const estimate = routes * PER_ROUTE_MS * (verify ? 1 : 0.6);
+  // An install is the slow part of a build and varies with the manager and the
+  // cache: bun did it in under two seconds here, npm takes far longer cold.
+  const estimate = routes * PER_ROUTE_MS * (verify ? 1 : 0.6) + (build ? 25_000 : 0);
   if (estimate <= deadline) return;
 
   throw new CommandError(
@@ -282,11 +285,20 @@ export async function clone(options = {}) {
     deadline: options.deadline,
     routes: requested,
     verify: !options.skipVerify,
-    what: `cloning ${requested} route(s)`,
-    alternative:
-      requested > 1
-        ? 'Ask for fewer routes, pass skipVerify, or run `design-os clone` in a terminal where nothing times out.'
-        : 'Run `design-os clone` in a terminal where nothing times out.',
+    build: Boolean(options.build),
+    what: `cloning ${requested} route(s)${options.build ? ' and building them' : ''}`,
+    alternative: [
+      requested > 1 ? 'Ask for fewer routes' : null,
+      !options.skipVerify ? 'pass skipVerify' : null,
+      // A build on its own fits where a clone plus a build does not, and the
+      // clone is the part worth keeping if only one of them can run.
+      options.build ? 'clone without build and then call design_build' : null,
+      'or run `design-os clone` in a terminal where nothing times out',
+    ]
+      .filter(Boolean)
+      .join(', ')
+      .replace(/^(\w)/, (first) => first.toUpperCase())
+      .concat('.'),
   });
 
   return exclusive(`a clone of ${options.url}`, () => cloneOnce(options));
@@ -317,6 +329,7 @@ async function cloneOnce(options) {
     modes: colourModes(options.modes),
     // A clone is worth editing, so the project scaffolding is written unless refused.
     vite: options.vite !== false,
+    build: Boolean(options.build),
   });
 
   const { entryReport: report, ...manifest } = site;
@@ -326,7 +339,9 @@ async function cloneOnce(options) {
   );
   if (site.slices?.length) progress(`Extracted ${site.slices.length} slices across ${new Set(site.slices.map((s) => s.layer)).size} layers`);
   if (site.fidelity) progress(`Fidelity ${Math.round(site.fidelity.score * 100)}% (lowest ${Math.round(site.fidelity.lowest * 100)}%)`);
-  if (site.project?.written) progress(`Wrote a Vite project over ${site.project.pages} page(s): npm install && npm run dev`);
+  if (site.project?.written && !site.project.built) {
+    progress(`Wrote a Vite project over ${site.project.pages} page(s): npm install && npm run dev`);
+  }
 
   const stem = `${WORKSPACE}/${slug(report.finalUrl)}`;
   const artefacts = { clone: dir, entry: site.entry };
@@ -352,6 +367,43 @@ async function cloneOnce(options) {
  * calling this twice for the same directory returns the same url, `stop` closes
  * it, and a host closes every one on shutdown.
  */
+/**
+ * Installs and builds a clone that already exists on disk.
+ *
+ * Separate from cloning because an install reaches the network and a clone plus
+ * an install plus a build does not fit inside one tool call, while each fits on
+ * its own. The source is untouched: afterwards there is a `dist/` to serve and
+ * the same pages to edit.
+ */
+export async function build(options = {}) {
+  const dir = await cloneDir(options.dir);
+
+  return exclusive(`a build of ${dir}`, async () => {
+    progress(`Installing and building ${dir}…`);
+    const built = await buildProject(dir, { manager: options.manager });
+    if (!built.ok) {
+      throw new CommandError(
+        'OPERATION_FAILED',
+        `the build failed at ${built.step ?? 'start'}: ${built.reason}. The copy itself is unaffected; ` +
+          'serve it as it is, or fix the reported step and build again.',
+      );
+    }
+
+    progress(`Built ${built.pages} page(s) into ${built.dist} with ${built.manager}, ${Math.round(built.bytes / 1024)}KB`);
+    // Spread first: the explicit fields below are the ones meant to win. Putting
+    // it last let built.dist -- a name relative to the clone -- overwrite the
+    // absolute path a caller needs, which is the second time that order has
+    // quietly replaced an intended value in this file.
+    return ok('build', {
+      ...built,
+      dir,
+      // Both paths, because the point of building in place is having both.
+      dist: resolve(dir, built.dist),
+      edit: dir,
+    });
+  });
+}
+
 export async function serve(options = {}) {
   if (options.stop) {
     const dir = options.dir ? await cloneDir(options.dir).catch(() => null) : null;
@@ -557,4 +609,4 @@ async function batchOnce(options) {
 }
 
 /** Every command the CLI and the MCP server expose. */
-export const COMMANDS = { directions, inspect, clone, serve, slices, batch };
+export const COMMANDS = { directions, inspect, clone, build, serve, slices, batch };

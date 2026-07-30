@@ -128,7 +128,9 @@ test('the doctor reports what a browser run needs', () => {
   assert.match(report, /node\s+v\d+/);
   assert.match(report, /websocket\s+built in/);
   assert.match(report, /chrome\s+\S+/);
-  assert.match(report, /design_inspect, design_clone, design_batch, design_serve, design_slices, design_directions/);
+  // Every declared tool has to appear, checked against the declaration so adding
+  // one cannot leave the doctor quietly reporting a stale surface.
+  for (const tool of TOOLS) assert.match(report, new RegExp(tool.name));
 });
 
 test('a result renders as a summary, never as raw json', async () => {
@@ -208,7 +210,7 @@ test('the same tools are never offered twice', async (t) => {
     // Disabled entry means it is not actually being served.
     await write({ 'design-os': { command: 'design-os-mcp', disabled: true } });
     assert.equal(servedOverMcp([config]), null);
-    assert.equal(load([config]).tools.size, 6);
+    assert.equal(load([config]).tools.size, TOOLS.length);
 
     // Somebody else's server is not ours.
     await write({ 'chrome-devtools': { command: 'npx', args: ['-y', 'chrome-devtools-mcp@latest'] } });
@@ -217,7 +219,7 @@ test('the same tools are never offered twice', async (t) => {
     // A broken config elsewhere on the machine must not stop design-os loading.
     await writeFile(config, '{ not json');
     assert.equal(servedOverMcp([config]), null);
-    assert.equal(load([config]).tools.size, 6);
+    assert.equal(load([config]).tools.size, TOOLS.length);
 
     // A path that does not exist is simply not a config.
     assert.equal(servedOverMcp([join(dir, 'absent.json')]), null);
