@@ -42,6 +42,15 @@ export const TOOLS = [
           default: 30000,
         },
         screenshot: { type: 'boolean', description: 'Also write a PNG of the loaded page.', default: false },
+        modes: {
+          type: 'array',
+          items: { type: 'string', enum: ['dark', 'light'] },
+          description:
+            'Extra colour schemes to read the design in. Tries prefers-color-scheme first, then the page\u2019s own theme control, ' +
+            'and reports a variant only once the page is shown to have actually changed \u2014 a site that ignores the media query ' +
+            'and keys theme off its own attribute would otherwise be reported twice as the same design.',
+          default: [],
+        },
         gallery: {
           type: 'boolean',
           description: 'Also render the extracted direction as a previewable HTML gallery.',
@@ -98,6 +107,12 @@ export const TOOLS = [
           default: false,
         },
         skipVerify: { type: 'boolean', description: 'Skip loading the clone back and scoring it.', default: false },
+        modes: {
+          type: 'array',
+          items: { type: 'string', enum: ['dark', 'light'] },
+          description: 'Also read the design in these colour schemes. The copy itself stays in the state the page arrived in.',
+          default: [],
+        },
         screenshot: { type: 'boolean', default: false },
         wait: { type: 'integer', minimum: 500, maximum: 120000, default: 15000 },
       },

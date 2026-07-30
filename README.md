@@ -325,6 +325,55 @@ count. With nothing installed the inferred chain applies unchanged, so design-os
 still runs with no dependencies at all — installing this one pulls `bippy` with
 it, which is the whole reason it is optional rather than required.
 
+### Colour schemes
+
+A site with a theme toggle has a second design, and a single capture never sees
+it. `--modes dark` reads the design again in that scheme.
+
+```
+design_clone { url: "lawsofux.com", modes: ["dark"] }
+```
+
+Two mechanisms, because one is not enough. `prefers-color-scheme` is emulated
+first, since it touches nothing on the page. A site that ignores it and keys
+theme off its own attribute is then asked through its own control — the button
+whose accessible name is about theme — and `lawsofux.com` is exactly that case:
+it reports the dark preference as matching and stays resolutely light until its
+own toggle is used.
+
+**A variant is only reported once the page is shown to have changed**, and change
+is judged by appearance alone, never by attributes on the root. Asking a page to
+go dark can set an attribute this tool put there itself; counting that as proof
+reported a variant on a fixture that had none. A site with one appearance and no
+way to change it says so:
+
+```json
+{ "mode": "dark", "changed": false,
+  "reason": "the page looks the same after asking, so it has no such variant" }
+```
+
+The tokens land in `app/styles/tokens.dark.css`, scoped by whatever actually
+selects that scheme — read off the root the page set rather than assumed:
+
+```css
+/* dark tokens — 63 values, active when :root[data-color-mode="dark"] applies */
+/* reached by control: Dark Mode Light Mode */
+:root[data-color-mode="dark"] { … }
+```
+
+A site that only answers the media query gets a `@media` wrapper instead.
+
+Reading a variant is the **last** thing a capture does. A clicked toggle does not
+come back when the emulated media query is cleared, so the copy, the slices and
+the screenshot are all taken in the state the page arrived in, and only then is
+the theme changed.
+
+Languages are usually separate routes — `lawsofux.com` links `/es/` and `/fr/` —
+so `--routes` reaches them like any other page, in breadth-first order. A
+language chosen from a dropdown that never changes the url is not reachable this
+way, and neither is a menu that has to be opened: those are interaction, not a
+second design.
+
 ### Reaching a clone without a shell
 
 Cloning is half the job: a clone has to be looked at and read from, and both were
@@ -491,7 +540,7 @@ Puppeteer and no Playwright; `npm test` runs 63 checks on stdlib `node:test`, in
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
 exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back
 through the served copy, and a Feature-Sliced run asserting that a slice carries the rules
-that matched it and none that did not. Total: 63 checks, including one that asserts the native and MCP surfaces are the same
+that matched it and none that did not. Total: 65 checks, including one that asserts the native and MCP surfaces are the same
 object rather than two copies of it, one that asserts a degraded capture is drawn above the
 verdict it invalidates, and one that asserts the two front ends never offer the same tool
 twice. The extension takes its config paths as an argument, so what a machine happens to

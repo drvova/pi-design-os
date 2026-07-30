@@ -36,6 +36,7 @@ directions options:
 inspect and clone options:
   --wait <ms>       ceiling on waiting for network idle       (default 15000)
   --timeout <ms>    per-operation Chrome timeout              (default 30000)
+  --modes <list>    also read the design in dark and/or light
   --screenshot      also write a PNG of the loaded page
   --gallery         render the extracted direction as HTML    (inspect)
 
@@ -63,6 +64,7 @@ const OPTIONS = {
   timeout: { type: 'string' },
   budget: { type: 'string' },
   routes: { type: 'string' },
+  modes: { type: 'string' },
   layout: { type: 'string' },
   screenshot: { type: 'boolean', default: false },
   gallery: { type: 'boolean', default: false },

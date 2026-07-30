@@ -1341,3 +1341,93 @@ export const SETTLE = `
   })();
 })();
 `;
+
+/**
+ * A fingerprint of whatever colour scheme the page is currently showing.
+ *
+ * Used to prove a variant is a variant. Emulating `prefers-color-scheme` does
+ * nothing on a site that drives theme from its own attribute — lawsofux.com
+ * reports `matches: true` for dark and stays resolutely light — so a switch has
+ * to be verified by looking at what actually changed rather than assumed from
+ * the request having been made.
+ */
+export const MODE_SIGNATURE = `
+(function () {
+  var root = document.documentElement;
+  var interesting = [];
+  for (var i = 0; i < root.attributes.length; i += 1) {
+    var attribute = root.attributes[i];
+    if (/^(class|data-.*(theme|mode|color|scheme).*)$/i.test(attribute.name)) {
+      interesting.push(attribute.name + '=' + attribute.value);
+    }
+  }
+
+  var rootStyle = getComputedStyle(root);
+  var bodyStyle = getComputedStyle(document.body);
+  return {
+    root: interesting.sort().join(' '),
+    colorScheme: rootStyle.colorScheme,
+    // The canvas is painted from html when body is transparent, which is the
+    // usual arrangement and the case on the site this was written against.
+    surface: bodyStyle.backgroundColor === 'rgba(0, 0, 0, 0)' ? rootStyle.backgroundColor : bodyStyle.backgroundColor,
+    text: bodyStyle.color,
+    prefersDark: matchMedia('(prefers-color-scheme: dark)').matches,
+  };
+})();
+`;
+
+/**
+ * Asks the page to change colour scheme using its own controls.
+ *
+ * Tried in order of how much it presumes. A control the page already offers is
+ * the site's own code path and leaves whatever it normally persists; setting the
+ * attribute a theme is keyed off is a guess about the mechanism, so it is only
+ * reached when no control could be found. Nothing here reloads: a reload would
+ * discard the walk and the state built up before it.
+ *
+ * @param {'dark'|'light'} mode
+ */
+export const activateMode = (mode) => `
+(function () {
+  var wanted = ${JSON.stringify(mode)};
+  var opposite = wanted === 'dark' ? 'light' : 'dark';
+  var THEME_WORDS = /dark|light|theme|colou?r ?mode|appearance/i;
+
+  function nameOf(element) {
+    return String(element.getAttribute('aria-label') || element.title || element.textContent || '').replace(/\\s+/g, ' ').trim();
+  }
+
+  // A switch already in the wanted state must not be flipped out of it.
+  var controls = [];
+  var candidates = document.querySelectorAll('button, [role="button"], [role="switch"], [role="checkbox"], input[type="checkbox"], a');
+  for (var i = 0; i < candidates.length; i += 1) {
+    var name = nameOf(candidates[i]);
+    if (name && THEME_WORDS.test(name) && name.length < 60) controls.push({ element: candidates[i], name: name });
+  }
+
+  if (controls.length > 0) {
+    var pick = controls[0];
+    for (var c = 0; c < controls.length; c += 1) {
+      // Prefer a control that names the mode being asked for.
+      if (new RegExp(wanted, 'i').test(controls[c].name)) { pick = controls[c]; break; }
+    }
+    pick.element.click();
+    return { via: 'control', detail: pick.name.slice(0, 48), controls: controls.length };
+  }
+
+  // No control: set the attribute a theme is commonly keyed off, and the class.
+  var root = document.documentElement;
+  var touched = [];
+  for (var a = 0; a < root.attributes.length; a += 1) {
+    var attribute = root.attributes[a];
+    if (/^data-.*(theme|mode|color|scheme)/i.test(attribute.name) && new RegExp(opposite, 'i').test(attribute.value)) {
+      root.setAttribute(attribute.name, attribute.value.replace(new RegExp(opposite, 'gi'), wanted));
+      touched.push(attribute.name);
+    }
+  }
+  if (root.classList.contains(opposite)) { root.classList.remove(opposite); root.classList.add(wanted); touched.push('class'); }
+  else if (wanted === 'dark' && touched.length === 0) { root.classList.add('dark'); touched.push('class'); }
+
+  return { via: touched.length ? 'attribute' : 'nothing', detail: touched.join(' ') || 'no control and no theme attribute', controls: 0 };
+})();
+`;

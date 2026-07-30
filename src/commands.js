@@ -78,6 +78,21 @@ async function cloneDir(reference) {
   );
 }
 
+/**
+ * Extra colour schemes to read, as a list.
+ *
+ * Accepts an array or a comma-separated string, because one comes from a tool
+ * call and the other from a command line.
+ */
+function colourModes(raw) {
+  if (!raw) return [];
+  const asked = (Array.isArray(raw) ? raw : String(raw).split(',')).map((mode) => mode.trim().toLowerCase()).filter(Boolean);
+  for (const mode of asked) {
+    if (mode !== 'dark' && mode !== 'light') throw usage(`--modes takes dark or light, got "${mode}"`);
+  }
+  return [...new Set(asked)];
+}
+
 /** Filesystem-safe stem for a url. */
 function slug(url) {
   return new URL(url).hostname.replace(/^www\./, '').replace(/[^a-z0-9]+/gi, '-');
@@ -140,9 +155,10 @@ export async function inspect(options = {}) {
   const wait = integer(options.wait, { name: 'wait', min: 500, max: 120000, fallback: 15000 });
   const timeout = integer(options.timeout, { name: 'timeout', min: 5000, max: 180000, fallback: 30000 });
   const screenshot = Boolean(options.screenshot);
+  const modes = colourModes(options.modes);
 
   progress(`Loading ${options.url}…`);
-  const report = await inspectPage({ url: options.url, wait, timeout, screenshot });
+  const report = await inspectPage({ url: options.url, wait, timeout, screenshot, modes });
   const stem = `${WORKSPACE}/${slug(report.finalUrl)}`;
 
   const artefacts = { report: await write(resolve(`${stem}.json`), JSON.stringify(report, null, 2)) };
@@ -193,6 +209,7 @@ export async function clone(options = {}) {
     screenshot: Boolean(options.screenshot),
     verify: !options.skipVerify,
     layout,
+    modes: colourModes(options.modes),
   });
 
   const { entryReport: report, ...manifest } = site;

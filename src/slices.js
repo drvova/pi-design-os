@@ -323,6 +323,58 @@ export async function writeAppStyles(root, sheetTexts, origin, replacements, she
   return { fonts: fonts.length, tokens: tokens.length, globals: globals.length, shellBytes: shellCss.length };
 }
 
+/**
+ * A colour scheme's tokens, as a rule scoped to whatever selects that scheme.
+ *
+ * Written beside the base tokens rather than replacing them, because a theme is
+ * a second set of values for the same names. The selector is taken from what the
+ * page actually had on its root when the scheme was active, so it matches the
+ * site's own mechanism instead of assuming `prefers-color-scheme` — which the
+ * site this was written against ignores entirely.
+ */
+export async function writeVariantTokens(root, variants) {
+  const written = [];
+
+  for (const variant of variants ?? []) {
+    if (!variant.changed || !variant.direction) continue;
+
+    const tokens = Object.entries(variant.direction.observed.declaredTokens ?? {});
+    const { selector, media } = variantSelector(variant);
+    const body = tokens.map(([name, value]) => `  ${name}: ${value};`).join('\n');
+    const rule = tokens.length > 0 ? `${selector} {\n${body}\n}` : '/* the page exposes no custom properties in this mode */';
+
+    await write(
+      root,
+      `app/styles/tokens.${variant.mode}.css`,
+      `/* ${variant.mode} tokens — ${tokens.length} values, active when ${media ?? selector} applies */\n` +
+        `/* reached by ${variant.activatedBy} */\n\n` +
+        (media ? `@media ${media} {\n${rule.replace(/^/gm, '  ')}\n}\n` : `${rule}\n`),
+    );
+    written.push({ mode: variant.mode, tokens: tokens.length, selector, media: media ?? null });
+  }
+  return written;
+}
+
+/**
+ * What selects the variant, read off the root the page actually set.
+ *
+ * A site that marks its theme with an attribute or a class is selected by that;
+ * one that only answers the media query has nothing on its root to key off, so
+ * the media query is the selector.
+ */
+function variantSelector(variant) {
+  for (const pair of String(variant.root ?? '').split(' ').filter(Boolean)) {
+    const [name, value] = pair.split('=');
+    if (name === 'class') {
+      const marker = value?.split(/\s+/).find((entry) => new RegExp(variant.mode, 'i').test(entry));
+      if (marker) return { selector: `:root.${marker}` };
+    } else if (value && new RegExp(variant.mode, 'i').test(value)) {
+      return { selector: `:root[${name}="${value}"]` };
+    }
+  }
+  return { selector: ':root', media: `(prefers-color-scheme: ${variant.mode})` };
+}
+
 /** The entry document, which under strict layering is a pointer into `pages`. */
 export async function writeEntry(root, homePath) {
   return write(

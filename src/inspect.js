@@ -27,7 +27,7 @@ import { collectSlices, writeSlices } from './slices.js';
 import { openPage } from './cdp.js';
 import { CommandError } from './envelope.js';
 import { toDirection } from './extract.js';
-import { HARVEST, PROBE, REVEAL, SETTLE, resolveTokens } from './probe.js';
+import { HARVEST, MODE_SIGNATURE, PROBE, REVEAL, SETTLE, activateMode, resolveTokens } from './probe.js';
 
 /** Fixed viewport: area-weighted colour extraction is only comparable at a fixed size. */
 const VIEWPORT = { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false };
@@ -297,6 +297,7 @@ function collect(session) {
  *
  * @param {{url:string, wait?:number, timeout?:number, screenshot?:boolean,
  *   reveal?:boolean,
+ *   modes?:string[],
  *   clone?:{dir:string, holder?:string, saved?:Map, layout?:string, scripts?:boolean,
  *     maxBytes?:number, slices?:{ledger:Map, routeMarker:string}}}} options
  */
@@ -307,6 +308,7 @@ export async function inspectPage({
   screenshot = false,
   clone = null,
   reveal = false,
+  modes = [],
 }) {
   const target = normaliseUrl(url);
   const session = await openPage({ timeout });
@@ -477,6 +479,69 @@ export async function inspectPage({
           routeMarker: clone.slices.routeMarker,
         })
       : null;
+
+    // Other colour schemes, read only now: the copy, the slices and the
+    // screenshot are all taken in the state the page arrived in, and asking for
+    // dark mode changes that state for good — a clicked toggle does not come back
+    // when the emulated media query is cleared.
+    //
+    // Two mechanisms, because one is not enough: emulating the media feature
+    // works on a site that respects it, and does nothing on a site that drives
+    // theme from its own attribute — lawsofux.com reports the dark preference as
+    // matching and stays light. So the site's own control is used as well, and
+    // either way the result is only called a variant once the page is shown to
+    // have actually changed.
+    const variants = [];
+    for (const mode of modes) {
+      const before = (await session.send('Runtime.evaluate', { expression: MODE_SIGNATURE, returnByValue: true })).result.value;
+
+      await session.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: mode }] });
+      await delay(500);
+      let after = (await session.send('Runtime.evaluate', { expression: MODE_SIGNATURE, returnByValue: true })).result.value;
+      let activatedBy = 'prefers-color-scheme';
+
+      // Appearance decides, never the root attributes: asking a page to change
+      // may set an attribute or class itself, and treating that as proof would
+      // report a variant on a site that simply ignored the request.
+      const looksSame = (left, right) => left.surface === right.surface && left.text === right.text;
+
+      if (looksSame(before, after)) {
+        const asked = await session.send('Runtime.evaluate', { expression: activateMode(mode), returnByValue: true });
+        await delay(900);
+        after = (await session.send('Runtime.evaluate', { expression: MODE_SIGNATURE, returnByValue: true })).result.value;
+        activatedBy = `${asked.result.value.via}: ${asked.result.value.detail}`;
+      }
+
+      const changed = !looksSame(before, after);
+      if (!changed) {
+        variants.push({ mode, activatedBy, changed: false, reason: 'the page looks the same after asking, so it has no such variant' });
+        continue;
+      }
+
+      const read = await session.send('Runtime.evaluate', { expression: HARVEST, returnByValue: true });
+      if (read.exceptionDetails) {
+        variants.push({ mode, activatedBy, changed: true, failed: read.exceptionDetails.text });
+        continue;
+      }
+      const seen = read.result.value;
+      const named = await session.send('Runtime.evaluate', {
+        expression: resolveTokens(declared.slice(0, MAX_TOKENS)),
+        returnByValue: true,
+      });
+      seen.design.customProperties = named.exceptionDetails ? {} : named.result.value;
+
+      variants.push({
+        mode,
+        activatedBy,
+        changed: true,
+        root: after.root,
+        colorScheme: after.colorScheme,
+        direction: toDirection(seen.design, { url: seen.document.url, title: seen.document.title }),
+      });
+    }
+
+    if (modes.length > 0) await session.send('Emulation.setEmulatedMedia', { features: [] });
+
 
     const milestones = collected.milestones();
     const milestone = (name) => milestones.find((entry) => entry.name === name)?.timestamp;
@@ -670,6 +735,7 @@ export async function inspectPage({
 
       stack: harvest.stack,
       links: harvest.links,
+      variants,
       // Used only for scoring a copy, never for the report above.
       comparable,
       settled,

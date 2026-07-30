@@ -75,6 +75,24 @@ Under `layout: "fsd"` each slice folder holds `ui/ui.html`, `ui/styles.css`
 the markup offered nothing more specific, so describe it by what it is rather
 than repeating an inferred name as fact.
 
+## Colour schemes
+
+A site with a theme toggle has a second design. Pass `modes: ["dark"]` to
+`design_inspect` or `design_clone` to read it.
+
+Check `changed` on each variant before reporting one. `false` means the page has
+no such scheme, and `activatedBy` says how it was reached — `prefers-color-scheme`
+for a site that respects the media query, `control: <name>` for one driven by its
+own button. Report the variant's own surface and accent rather than implying the
+base colours apply to it.
+
+The copy itself stays in the state the page arrived in; a variant is a second
+reading of the design, not a second clone.
+
+Languages are usually separate routes, so `routes` reaches them. A language or
+menu that only changes state without changing the url is not captured — say so
+rather than implying it was.
+
 ## After a clone
 
 Do not shell out to read or serve a clone; both are tools.

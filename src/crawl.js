@@ -29,7 +29,7 @@ import {
 } from './clone.js';
 import { progress } from './envelope.js';
 import { inspectPage, normaliseUrl } from './inspect.js';
-import { writeAppStyles, writeEntry, writeManifest, writeReadme } from './slices.js';
+import { writeAppStyles, writeEntry, writeManifest, writeReadme, writeVariantTokens } from './slices.js';
 
 /** Linked, but never a page: following these wastes a browser launch. */
 const NOT_A_DOCUMENT =
@@ -92,6 +92,7 @@ export async function cloneSite({
   screenshot = false,
   verify = true,
   layout = 'flat',
+  modes = [],
 }) {
   const entry = normaliseUrl(url);
   const origin = new URL(entry).origin;
@@ -115,6 +116,8 @@ export async function cloneSite({
       wait,
       timeout,
       screenshot: screenshot && next === entry,
+      // Only the entry: a variant is a property of the design, not of each route.
+      modes: next === entry ? modes : [],
       clone: {
         dir,
         holder,
@@ -166,6 +169,7 @@ export async function cloneSite({
       entryReport.shellCss ?? '',
     );
     await writeEntry(dir, captured.get(entry).holder);
+    layers.variants = await writeVariantTokens(dir, entryReport.variants);
   }
 
   const summaries = [...captured].map(([routeUrl, { report, holder }]) => ({
