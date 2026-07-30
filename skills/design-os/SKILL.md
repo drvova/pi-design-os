@@ -50,9 +50,13 @@ design_clone { url: "emilkowal.ski", routes: 6, layout: "fsd" }
   anchors in the rendered DOM. Start small: each route is a full browser load.
 - `layout: "fsd"` writes a Feature-Sliced Design tree and extracts components
   into their own folders. `flat` mirrors the origin instead.
-- Scripts are saved but disabled. The markup is the DOM after hydration, so
-  live scripts would hydrate onto markup they did not build. Pass
-  `scripts: true` only if the user asks for a running copy.
+- `scripts: false` (default) is **snapshot** mode: the DOM after hydration, with
+  canvas frames, script-driven animations and lazy content frozen into the
+  markup. Opens straight from disk. Use it to study a design.
+- `scripts: true` is **mirror** mode: the html the server sent, with same-origin
+  files at their original pathname so runtime-built urls resolve. The page runs.
+  It must be served over http, not opened from disk. Use it when the user wants
+  a working copy rather than a readable one.
 
 Verification runs by default: the copy is served over http, put through the
 identical analysis, and scored against the original. Report `fidelity.score`

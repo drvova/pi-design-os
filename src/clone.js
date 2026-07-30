@@ -144,6 +144,17 @@ export const LAYOUTS = {
   },
 };
 
+/** The pathname a file was served from, sanitised but otherwise untouched. */
+function originPath(rawUrl, mimeType) {
+  const url = new URL(rawUrl);
+  const parts = url.pathname.split('/').filter((part) => part && part !== '.' && part !== '..').map(segment);
+  if (parts.length === 0) parts.push('index');
+
+  let file = parts.pop();
+  if (!extname(file)) file += EXTENSION_FOR[String(mimeType).split(';')[0]] ?? '';
+  return posix.join(...parts, file);
+}
+
 /** Directory form, so `/docs` and `/docs/install` cannot collide on one path. */
 function routeSegments(rawUrl) {
   const url = new URL(rawUrl);
@@ -248,13 +259,34 @@ export async function captureClone(session, {
   saved = new Map(),
   layout = 'flat',
   keepScripts = false,
+  sourceHtml = '',
   maxBytes = 40 * 1024 * 1024,
 }) {
-  const snapshot = await session.send('Runtime.evaluate', { expression: SNAPSHOT, returnByValue: true });
-  if (snapshot.exceptionDetails) {
+  // Keeping the scripts changes what a copy has to be.
+  //
+  // A framework hydrates against the markup its server sent, so handing it the
+  // DOM that hydration already produced makes React tear the tree down: the page
+  // collapsed from 132 elements to 12. And a chunk loader builds its urls at
+  // runtime, so no rewriter can ever see them -- emilkowal.ski's builds twelve
+  // more `/_next/...` paths after load, on top of the thirty-one in its markup.
+  //
+  // Both are answered the same way: serve the site's own shape. Mirror mode
+  // keeps the server's html and writes same-origin assets at the pathname they
+  // were served from, so a root-relative url resolves whether it came from the
+  // markup or from a script. Cross-origin assets are still filed and rewritten,
+  // because nothing on this origin will ever construct those.
+  const mirror = keepScripts;
+  const snapshot = mirror ? null : await session.send('Runtime.evaluate', { expression: SNAPSHOT, returnByValue: true });
+  if (snapshot?.exceptionDetails) {
     throw new Error(`snapshot failed: ${snapshot.exceptionDetails.text}`);
   }
-  const { html, notes } = snapshot.result.value;
+  if (mirror && !sourceHtml) {
+    throw new Error('mirror mode needs the served html; the document body was not available');
+  }
+
+  const { html, notes } = mirror
+    ? { html: sourceHtml, notes: { mirrored: true, inlineSheets: 0, adoptedSheets: 0, rules: 0, unreadable: 0, fields: 0, shadowRoots: 0, closedHosts: 0, canvases: 0, canvasBytes: 0, animations: 0, posters: 0 } }
+    : snapshot.result.value;
 
   const savable = assets
     .filter(
@@ -305,11 +337,19 @@ export async function captureClone(session, {
       continue;
     }
 
-    const path = localPath(asset.url, asset.mimeType, LAYOUTS[layout].assetRoot(asset));
+    // Same-origin, in mirror mode: keep the served pathname, so a url a script
+    // builds at runtime finds the file exactly where the origin had it.
+    const sameOrigin = new URL(asset.url).origin === pageOrigin;
+    const path =
+      mirror && sameOrigin
+        ? originPath(asset.url, asset.mimeType)
+        : localPath(asset.url, asset.mimeType, LAYOUTS[layout].assetRoot(asset));
     const content = body.base64Encoded ? Buffer.from(body.body, 'base64') : Buffer.from(body.body, 'utf8');
     bytes += content.length;
 
-    replacements.push({ url: asset.url, path });
+    // A same-origin reference already resolves in mirror mode; rewriting it to a
+    // relative path would only break the runtime-built ones that look identical.
+    if (!(mirror && sameOrigin)) replacements.push({ url: asset.url, path });
     saved.set(asset.url, path);
     // Text is rewritten only once the map is complete: a sheet can reference a
     // font that has not been walked yet.
@@ -331,11 +371,14 @@ export async function captureClone(session, {
   let document = localise(html, holder, pageOrigin, replacements);
   // A <base> would send every relative path back to the original origin.
   document = document.replace(/<base\b[^>]*>/gi, '');
-  // Hints only describe loading. Kept, they 404 locally and pollute a re-inspection.
-  document = document.replace(
-    /<link\b[^>]*\brel\s*=\s*["']?(?:preload|modulepreload|prefetch|prerender|preconnect|dns-prefetch)["']?[^>]*>/gi,
-    '',
-  );
+  // Hints only describe loading. In a snapshot they 404 and pollute a
+  // re-inspection; in a mirror they point at files that are now really there.
+  if (!mirror) {
+    document = document.replace(
+      /<link\b[^>]*\brel\s*=\s*["']?(?:preload|modulepreload|prefetch|prerender|preconnect|dns-prefetch)["']?[^>]*>/gi,
+      '',
+    );
+  }
   // The origin's own policy can only break a copy of it: a CSP naming the
   // original's hosts blocks every local file, and an integrity hash on a
   // stylesheet fails the moment the reference is rewritten.
@@ -389,6 +432,7 @@ export async function captureClone(session, {
     reused,
     byType,
     documentBytes: document.length,
+    mode: mirror ? 'mirror' : 'snapshot',
     scripts: keepScripts ? 'kept' : 'disabled',
     framesEmptied: frames,
     // What the CSSOM held and serialization would otherwise have dropped.

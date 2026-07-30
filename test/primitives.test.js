@@ -133,3 +133,86 @@ test('what only an api could draw is carried into the clone', async (t) => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+/**
+ * A page that only works if its own urls keep working.
+ *
+ * The stylesheet is referenced root-relatively, and the script builds a second
+ * url at runtime — the case no rewriter can see, because the string does not
+ * exist until the script runs.
+ */
+const MIRROR_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="/_build/site.css">
+</head><body><main id="root">server rendered</main>
+<script src="/_build/boot.js"></script>
+</body></html>`;
+
+test('keeping the scripts means serving the site its own shape', async (t) => {
+  try {
+    chromePath();
+  } catch {
+    t.skip('no Chrome or Chromium on this machine');
+    return;
+  }
+
+  const files = {
+    '/_build/site.css': ['body{background:#101018;color:#eee;font-family:sans-serif}', 'text/css'],
+    // Builds its url at runtime, so the string is never in the markup.
+    '/_build/boot.js': [
+      "var part='late';document.head.appendChild(Object.assign(document.createElement('link'),{rel:'stylesheet',href:'/_build/'+part+'.css'}));" +
+        "document.getElementById('root').textContent='hydrated by script';",
+      'text/javascript',
+    ],
+    '/_build/late.css': ['#root{outline:3px solid rgb(83,58,253)}', 'text/css'],
+  };
+
+  const origin = createServer((request, response) => {
+    const entry = files[request.url];
+    response.writeHead(entry ? 200 : (request.url === '/' ? 200 : 404), {
+      'content-type': entry ? entry[1] : 'text/html',
+    });
+    response.end(entry ? entry[0] : MIRROR_PAGE);
+  });
+  await new Promise((ready) => origin.listen(0, '127.0.0.1', ready));
+
+  const url = `http://127.0.0.1:${origin.address().port}/`;
+  const dir = join(tmpdir(), `design-os-mirror-${process.pid}`);
+  const { serveDirectory } = await import('../src/clone.js');
+
+  try {
+    const report = await inspectPage({ url, wait: 5000, clone: { dir, scripts: true } });
+    assert.equal(report.clone.mode, 'mirror');
+    assert.equal(report.clone.scripts, 'kept');
+
+    // Same-origin files keep the pathname they were served from; a bucketed
+    // copy under assets/ would leave every runtime-built url pointing at air.
+    const html = await readFile(join(dir, 'index.html'), 'utf8');
+    assert.match(html, /href="\/_build\/site\.css"/, 'a same-origin reference is left to resolve');
+    assert.ok(await readFile(join(dir, '_build', 'site.css'), 'utf8'));
+    assert.ok(await readFile(join(dir, '_build', 'late.css'), 'utf8'), 'the runtime-built url must resolve too');
+
+    // The served markup, not the DOM hydration produced: a framework tears the
+    // tree down when handed the output of its own previous run.
+    assert.match(html, />server rendered</, 'mirror keeps what the server sent');
+    assert.doesNotMatch(html, /hydrated by script/);
+    assert.doesNotMatch(html, /type="text\/plain"/, 'scripts stay live in a mirror');
+
+    const served = await serveDirectory(dir);
+    try {
+      const replica = await inspectPage({ url: served.url, wait: 4000 });
+      assert.equal(replica.capture.failed, 0, 'every url the page builds must resolve');
+      assert.equal(replica.capture.degraded, false);
+      // Proof the scripts ran: both the DOM edit and the url they constructed.
+      assert.ok(
+        replica.assets.order.some((asset) => asset.url.endsWith('/_build/late.css')),
+        'the runtime-built stylesheet was never requested, so the script did not run',
+      );
+      assert.equal(replica.direction.observed.surface.hex, '#101018');
+    } finally {
+      await served.close();
+    }
+  } finally {
+    origin.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

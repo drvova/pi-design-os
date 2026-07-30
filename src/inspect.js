@@ -404,6 +404,7 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
           saved: clone.saved,
           layout: clone.layout,
           keepScripts: clone.scripts,
+          sourceHtml: html,
           maxBytes: clone.maxBytes,
         })
       : null;

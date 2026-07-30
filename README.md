@@ -120,14 +120,42 @@ clone back and watching it fail:
   local file, and an SRI hash fails the moment a reference is rewritten. Both are
   stripped, along with resource hints, which can only 404 against a clone.
 
-Scripts are saved but disabled by default. A rendered DOM plus live scripts means
-a framework hydrating onto markup it did not produce; `--scripts` keeps them if
-that is what you want.
+### Two modes
+
+Scripts are saved but disabled by default. `--scripts` keeps them, and that
+changes what a copy has to be, so it switches modes.
+
+| | snapshot (default) | mirror (`--scripts`) |
+| --- | --- | --- |
+| markup | the DOM after hydration | the html the server sent |
+| same-origin assets | filed under `shared/` or `assets/` | the pathname they were served from |
+| references | rewritten to local files | same-origin left to resolve |
+| canvas, animations, reveals | frozen into the markup | left to the scripts |
+| opens from disk | yes | no, must be served |
+
+Handing a framework the DOM its own hydration produced makes it tear the tree
+down: emilkowal.ski collapsed from 85 elements to 12, unstyled, with 13 of 25
+requests failing. And a chunk loader builds urls while it runs, so no rewriter
+can ever see them — that page's markup holds 31 root-relative `/_next/` paths
+and its scripts construct 12 more after load.
+
+Both are answered the same way: serve the site its own shape. Mirror mode keeps
+the served html, so hydration matches, and writes same-origin files at their
+original pathname, so a root-relative url resolves whether it came from the
+markup or from a script. Cross-origin assets are still filed and rewritten,
+because nothing on this origin will ever construct those.
+
+Mirrored, the same page loads with **0 of 24 requests failing**, 85 elements
+against the original's 85, 19 browser APIs called against 19, 91 listener types,
+and 102 post-DOMContentLoaded mutations. It is running, not just rendered.
+
+Pick snapshot to study a design and mirror to keep a page working.
 
 ### What only an API could draw
 
-Disabling scripts takes the APIs away with them, so anything painted rather than
-declared would be lost. Four things are frozen while the page is still live:
+In snapshot mode, disabling scripts takes the APIs with them, so anything painted
+rather than declared would be lost. Four things are frozen while the page is
+still live. Mirror mode skips all of it, because the scripts do it themselves:
 
 - **Canvas and WebGL.** The last painted frame is read back and set as the
   element's own background, at the same size. A WebGL drawing buffer is cleared
@@ -350,7 +378,7 @@ Puppeteer and no Playwright; `npm test` runs 37 checks on stdlib `node:test`, in
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
 exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back
 through the served copy, and a Feature-Sliced run asserting that a slice carries the rules
-that matched it and none that did not. Total: 58 checks, including one that asserts the native and MCP surfaces are the same
+that matched it and none that did not. Total: 59 checks, including one that asserts the native and MCP surfaces are the same
 object rather than two copies of it, one that asserts a degraded capture is drawn above the
 verdict it invalidates, and one that asserts the two front ends never offer the same tool
 twice. The extension takes its config paths as an argument, so what a machine happens to
