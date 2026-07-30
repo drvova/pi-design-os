@@ -1268,3 +1268,76 @@ export const SOURCE_NAMES = `
   return { available: true, named: named, failed: failed, total: roots.length, names: names };
 })();
 `;
+
+/**
+ * Waits for the page to stop moving before it is measured.
+ *
+ * `document.getAnimations` reports CSS animations, CSS transitions and Web
+ * Animations together, and each carries a `finished` promise. Awaiting those is
+ * what turns "photograph a moving page twice" into two readings of the same
+ * pose: stripe.com animates as it loads, and counting how many elements are laid
+ * out as grid or flex a moment apart caught a handful of them mid-transition.
+ *
+ * Two things make this bounded rather than a hang. An animation set to run
+ * forever never reaches `finished`, so anything with infinite iterations is left
+ * alone — a spinner is not something to wait for. And `finished` rejects when an
+ * animation is cancelled, which is ordinary on a page that is still settling, so
+ * each is caught on its own rather than failing the batch.
+ */
+export const SETTLE = `
+(function () {
+  var CEILING_MS = 6000;
+
+  function rest(ms) { return new Promise(function (done) { setTimeout(done, ms); }); }
+  function frame() { return new Promise(function (done) { requestAnimationFrame(function () { done(); }); }); }
+
+  return (async function () {
+    if (typeof document.getAnimations !== 'function') return { supported: false, awaited: 0 };
+
+    var running = document.getAnimations();
+    var finite = [];
+    var endless = 0;
+
+    for (var i = 0; i < running.length; i += 1) {
+      var animation = running[i];
+      var iterations = Infinity;
+      try {
+        var timing = animation.effect && animation.effect.getComputedTiming
+          ? animation.effect.getComputedTiming()
+          : (animation.effect && animation.effect.getTiming ? animation.effect.getTiming() : null);
+        iterations = timing ? timing.iterations : Infinity;
+      } catch (error) {
+        iterations = Infinity;
+      }
+
+      if (iterations === Infinity || iterations === null) { endless += 1; continue; }
+      if (animation.playState === 'paused' || animation.playState === 'idle') continue;
+      finite.push(animation);
+    }
+
+    var timedOut = false;
+    if (finite.length > 0) {
+      var settled = Promise.all(finite.map(function (animation) {
+        // A cancelled animation rejects, and that still counts as stopped.
+        return animation.finished.catch(function () { return null; });
+      }));
+      var raced = await Promise.race([settled.then(function () { return 'settled'; }), rest(CEILING_MS).then(function () { return 'timeout'; })]);
+      timedOut = raced === 'timeout';
+    }
+
+    // Two frames after the last animation ends, so the layout it produced is the
+    // layout that gets measured.
+    await frame();
+    await frame();
+
+    return {
+      supported: true,
+      awaited: finite.length,
+      endless: endless,
+      total: running.length,
+      timedOut: timedOut,
+      stillRunning: document.getAnimations().length,
+    };
+  })();
+})();
+`;

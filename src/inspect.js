@@ -27,7 +27,7 @@ import { collectSlices, writeSlices } from './slices.js';
 import { openPage } from './cdp.js';
 import { CommandError } from './envelope.js';
 import { toDirection } from './extract.js';
-import { HARVEST, PROBE, REVEAL, resolveTokens } from './probe.js';
+import { HARVEST, PROBE, REVEAL, SETTLE, resolveTokens } from './probe.js';
 
 /** Fixed viewport: area-weighted colour extraction is only comparable at a fixed size. */
 const VIEWPORT = { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false };
@@ -431,8 +431,18 @@ export async function inspectPage({
     // it describes a smaller page than the one written: notion.com mounts content
     // while slices are being detected and matched, and the replica came back 48
     // elements ahead of the reading it was being scored against.
+    // Wait for the page to stop moving first. Counting how many elements are
+    // laid out as grid or flex is only comparable between two readings of the
+    // same pose, and stripe.com animates as it loads: six of its elements were
+    // caught mid-transition, which is the whole of its remaining difference.
+    let settled = null;
     let comparable = null;
     if (revealed && !revealed.failed) {
+      const quiet = await session
+        .send('Runtime.evaluate', { expression: SETTLE, returnByValue: true, awaitPromise: true })
+        .catch((error) => ({ exceptionDetails: { text: error.message } }));
+      settled = quiet.exceptionDetails ? { failed: quiet.exceptionDetails.text } : quiet.result.value;
+
       const after = await session.send('Runtime.evaluate', { expression: HARVEST, returnByValue: true });
       if (!after.exceptionDetails) {
         const complete = after.result.value;
@@ -662,6 +672,7 @@ export async function inspectPage({
       links: harvest.links,
       // Used only for scoring a copy, never for the report above.
       comparable,
+      settled,
       clone: cloned && {
         ...cloned,
         attachShadowCalls: probe.apis.attachShadow?.total ?? 0,

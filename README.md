@@ -382,10 +382,18 @@ that had nothing to do with Next.
 | `vuejs.org` | Vue, VitePress | 2 | 100% | 69 |
 | `htmx.org` | HTMX, no build step | 2 | 100% | 49 |
 
-Seven of those eight now score **exactly 1.0 on every check**. `stripe.com` sits at
-0.997 on `grids` and `flexes`, which are counts of computed `display` values and
-the last thing still moving between two readings of a page that animates as it
-loads.
+Seven of those eight score **exactly 1.0 on every check**, as do `notion.com`,
+`framer.com`, `cal.com` and `emilkowal.ski`.
+
+`stripe.com` sits at 0.998, and the reason is now measured rather than guessed:
+its homepage never reaches a still state. Waiting for its animations timed out at
+six seconds and the number of running animations was *higher* after the wait than
+before it — 88 against 87 — so it is generating them continuously. Two of its 76
+grid containers are therefore always caught in a different pose between two
+readings, and no amount of waiting closes that. `grids` and `flexes` could be
+dropped from the score to make it read 1.0, and are not: unlike a `link`, a grid
+container is structure, and a check that would catch a missing one is worth more
+than a round number.
 | `svelte.dev` | SvelteKit | 2 | 100% | 53 |
 
 Eight stacks, every one at 100%, each under 40 seconds with `--layout fsd`.
@@ -412,6 +420,13 @@ it.
   while it runs — notion.com adds eighteen — and a copy with its scripts disabled
   can never have them. A `link` renders nothing, so counting one measures loading
   metadata rather than structure, and none of them count on either side.
+- **The page is allowed to stop moving first.** `document.getAnimations` reports
+  CSS animations, transitions and Web Animations together, and each carries a
+  `finished` promise. Awaiting the finite ones, then two frames, turns two
+  photographs of a moving page into two readings of the same pose. Anything set
+  to run forever is left alone, because a spinner is not something to wait for,
+  and a cancelled animation rejects rather than resolving, which is ordinary
+  while a page settles and is caught per animation instead of failing the batch.
 
 ### What a clone is not
 
