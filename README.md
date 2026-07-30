@@ -124,6 +124,45 @@ Scripts are saved but disabled by default. A rendered DOM plus live scripts mean
 a framework hydrating onto markup it did not produce; `--scripts` keeps them if
 that is what you want.
 
+### What only an API could draw
+
+Disabling scripts takes the APIs away with them, so anything painted rather than
+declared would be lost. Four things are frozen while the page is still live:
+
+- **Canvas and WebGL.** The last painted frame is read back and set as the
+  element's own background, at the same size. A WebGL drawing buffer is cleared
+  after compositing unless the context was asked to keep it, and that can only be
+  set when the context is created — which is why the probe wraps `getContext`
+  before any page script runs and forces `preserveDrawingBuffer`. A canvas that
+  was never painted is skipped, since a blank frame would cover a background the
+  stylesheet already provides.
+- **`Element.animate`.** A script-driven animation never reaches the CSSOM, so
+  each one is rewritten as the `@keyframes` and shorthand it is equivalent to. A
+  `CSSAnimation` or `CSSTransition` already has a rule behind it and is left
+  alone. An animation that has finished and is not filling has no state to keep.
+- **Video.** The current frame becomes a `poster`, so a paused player shows the
+  frame it was showing.
+- **Anything waiting for a viewport.** The page is walked top to bottom before
+  capture, then returned to the top, so `loading="lazy"` images load and reveal
+  observers fire. Without it a clone copies the top of a page and leaves the rest
+  as placeholders that will never fill, because the observers go with the scripts.
+
+The walk runs **after** every measurement in the report and before the copy is
+taken. Scrolling a page makes it do things, and those belong to the tool, not to
+the site; the pipeline sections still describe the page's own behaviour.
+
+### What still does not survive
+
+A clone is a rendered state, not a running program. Event listeners are counted
+but not wired, `fetch` results are frozen at capture, `matchMedia` and
+`ResizeObserver` do not re-run at another size, workers and cross-origin frames
+are unreachable, and closed shadow roots are unreachable by design. CSS keeps
+working unaided: transitions, keyframes, `:hover`, media and container queries.
+
+`fidelity` scores surface, palette, type, spacing and layout shape. Those are
+design dimensions and they survive. **It measures nothing about behaviour** — a
+score of 100% says the design carried over, not that the site works.
+
 ### Crawling a site
 
 `--routes` above 1 walks the site breadth-first from the entry url. Destinations
@@ -311,7 +350,7 @@ Puppeteer and no Playwright; `npm test` runs 37 checks on stdlib `node:test`, in
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
 exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back
 through the served copy, and a Feature-Sliced run asserting that a slice carries the rules
-that matched it and none that did not. Total: 57 checks, including one that asserts the native and MCP surfaces are the same
+that matched it and none that did not. Total: 58 checks, including one that asserts the native and MCP surfaces are the same
 object rather than two copies of it, one that asserts a degraded capture is drawn above the
 verdict it invalidates, and one that asserts the two front ends never offer the same tool
 twice. The extension takes its config paths as an argument, so what a machine happens to

@@ -43,6 +43,7 @@ export const PROBE = `
     attributes: Object.create(null),
     textEdits: { loading: 0, interactive: 0, complete: 0 },
     contexts: Object.create(null),
+    preservedBuffers: 0,
     timeline: [],
     errors: []
   };
@@ -171,11 +172,28 @@ export const PROBE = `
   ].forEach(function (entry) { wrapMethod(entry[0], entry[1], entry[2], report.apis); });
 
   // Canvas context type separates a 2D chart from a WebGL scene.
-  wrapMethod(
-    window.HTMLCanvasElement && HTMLCanvasElement.prototype, 'getContext', 'canvas.getContext',
-    report.apis,
-    function (args) { bump(report.contexts, String(args[0])); }
-  );
+  //
+  // A WebGL drawing buffer is cleared after compositing unless the context was
+  // asked to keep it, so toDataURL on one reads back blank. The attribute can
+  // only be set when the context is created, and this is the last moment before
+  // any page script runs. Forcing it costs a little memory and is what makes a
+  // WebGL scene survive into a clone as pixels instead of an empty element.
+  guard('canvas.getContext', function () {
+    if (!window.HTMLCanvasElement) return;
+    var original = HTMLCanvasElement.prototype.getContext;
+    var wrapper = function (type, attributes) {
+      bump(report.apis, 'canvas.getContext');
+      bump(report.contexts, String(type));
+      var kept = attributes;
+      if (/webgl|webgpu/i.test(String(type))) {
+        kept = Object.assign({}, attributes || {}, { preserveDrawingBuffer: true });
+        report.preservedBuffers += 1;
+      }
+      return original.call(this, type, kept);
+    };
+    disguise(wrapper, original);
+    HTMLCanvasElement.prototype.getContext = wrapper;
+  });
 
   // Every write below is styling that CSS did not do on its own.
   [
@@ -575,7 +593,12 @@ export const resolveTokens = (names) => `
  */
 export const SNAPSHOT = `
 (function () {
-  var notes = { inlineSheets: 0, adoptedSheets: 0, rules: 0, unreadable: 0, fields: 0, shadowRoots: 0, closedHosts: 0 };
+  var notes = {
+    inlineSheets: 0, adoptedSheets: 0, rules: 0, unreadable: 0, fields: 0,
+    shadowRoots: 0, closedHosts: 0, canvases: 0, canvasBytes: 0, animations: 0, posters: 0,
+  };
+
+  function kebab(property) { return property.replace(/[A-Z]/g, function (c) { return '-' + c.toLowerCase(); }); }
 
   // Constructed sheets attached to a root are materialised into it, so a shadow
   // tree keeps its styling once serialized.
@@ -635,6 +658,110 @@ export const SNAPSHOT = `
     }
   })(document, 0);
   notes.shadowRoots = roots.length;
+
+  // A canvas paints through an API, and the API is gone once scripts are off.
+  // What can be kept is the last frame it painted, read back as an image and
+  // set as the element's own background so it renders at the same size.
+  var canvases = document.querySelectorAll('canvas');
+  for (var c = 0; c < canvases.length; c += 1) {
+    var canvas = canvases[c];
+    if (!canvas.width || !canvas.height) continue;
+    try {
+      var frame = canvas.toDataURL('image/png');
+      // A blank canvas serialises to a few dozen bytes; keeping those would
+      // overwrite a background the stylesheet may already provide.
+      if (frame.length < 512) continue;
+      canvas.setAttribute('data-design-os', 'canvas-frame');
+      canvas.style.backgroundImage = 'url(' + frame + ')';
+      canvas.style.backgroundSize = '100% 100%';
+      canvas.style.backgroundRepeat = 'no-repeat';
+      notes.canvases += 1;
+      notes.canvasBytes += frame.length;
+    } catch (error) {
+      // A canvas tainted by a cross-origin draw cannot be read back at all.
+      notes.unreadable += 1;
+    }
+  }
+
+  // A video holds a frame the same way, and a poster survives where playback
+  // cannot. Drawing it needs a same-origin source, so a tainted one is skipped.
+  var videos = document.querySelectorAll('video');
+  for (var v = 0; v < videos.length; v += 1) {
+    var video = videos[v];
+    if (video.getAttribute('poster') || !video.videoWidth) continue;
+    try {
+      var still = document.createElement('canvas');
+      still.width = video.videoWidth;
+      still.height = video.videoHeight;
+      still.getContext('2d').drawImage(video, 0, 0);
+      video.setAttribute('poster', still.toDataURL('image/jpeg', 0.8));
+      notes.posters += 1;
+    } catch (error) {
+      notes.unreadable += 1;
+    }
+  }
+
+  // Element.animate produces animations the CSSOM never sees, so serialization
+  // loses them entirely. Each script-driven one is rewritten as the @keyframes
+  // and shorthand it is equivalent to; a CSSAnimation or CSSTransition already
+  // has a rule behind it and is left alone.
+  if (typeof document.getAnimations === 'function') {
+    var css = [];
+    var running = document.getAnimations();
+    for (var a = 0; a < running.length && css.length < 200; a += 1) {
+      try {
+        var animation = running[a];
+        if (animation.constructor && animation.constructor.name !== 'Animation') continue;
+        var effect = animation.effect;
+        if (!effect || !effect.target || typeof effect.getKeyframes !== 'function') continue;
+
+        var frames = effect.getKeyframes();
+        if (frames.length === 0) continue;
+        var timing = effect.getTiming();
+        var name = 'design-os-anim-' + notes.animations;
+
+        var steps = [];
+        for (var f = 0; f < frames.length; f += 1) {
+          var keyframe = frames[f];
+          var declarations = [];
+          for (var property in keyframe) {
+            if (property === 'offset' || property === 'computedOffset' || property === 'easing' || property === 'composite') continue;
+            if (keyframe[property] === null || keyframe[property] === undefined) continue;
+            declarations.push(kebab(property) + ':' + keyframe[property]);
+          }
+          if (declarations.length === 0) continue;
+          var at = Math.round((keyframe.computedOffset !== undefined ? keyframe.computedOffset : f / Math.max(1, frames.length - 1)) * 100);
+          steps.push(at + '% { ' + declarations.join(';') + ' }');
+        }
+        if (steps.length === 0) continue;
+
+        effect.target.setAttribute('data-design-os-anim', name);
+        var duration = typeof timing.duration === 'number' ? timing.duration : 0;
+        var shorthand = [
+          name,
+          duration + 'ms',
+          timing.easing || 'linear',
+          (timing.delay || 0) + 'ms',
+          timing.iterations === Infinity ? 'infinite' : (timing.iterations || 1),
+          timing.direction || 'normal',
+          timing.fill && timing.fill !== 'auto' ? timing.fill : 'both',
+        ].join(' ');
+
+        css.push('@keyframes ' + name + ' { ' + steps.join(' ') + ' }');
+        css.push('[data-design-os-anim="' + name + '"] { animation: ' + shorthand + '; }');
+        notes.animations += 1;
+      } catch (error) {
+        notes.unreadable += 1;
+      }
+    }
+
+    if (css.length > 0) {
+      var sheet = document.createElement('style');
+      sheet.setAttribute('data-design-os', 'animations');
+      sheet.textContent = css.join('\\n');
+      document.head.appendChild(sheet);
+    }
+  }
 
   var fields = document.querySelectorAll('input, textarea, select option');
   for (var f = 0; f < fields.length; f += 1) {
@@ -925,5 +1052,65 @@ export const SLICES = `
       return slice;
     }),
   };
+})();
+`;
+
+/**
+ * Walks the page so everything that waits for a viewport has happened.
+ *
+ * A page built with `IntersectionObserver` and `loading="lazy"` only renders
+ * what has been near the viewport. Capturing without scrolling copies the top of
+ * the page and leaves the rest as empty placeholders that will never fill,
+ * because the observers are gone once the scripts are disabled.
+ *
+ * Evaluated with `awaitPromise`, and bounded: a page that grows as it is
+ * scrolled would otherwise never end.
+ */
+export const REVEAL = `
+(function () {
+  var MAX_STEPS = 60;
+  var STEP_MS = 90;
+  var start = performance.now();
+  var steps = 0;
+
+  function rest(ms) { return new Promise(function (done) { setTimeout(done, ms); }); }
+
+  return (async function () {
+    var previousHeight = 0;
+    for (; steps < MAX_STEPS; steps += 1) {
+      var height = document.documentElement.scrollHeight;
+      var target = Math.min(steps * window.innerHeight * 0.8, height);
+      window.scrollTo(0, target);
+      await rest(STEP_MS);
+      // Stop once the bottom is reached and the page has stopped growing.
+      if (target >= height && height === previousHeight) break;
+      previousHeight = height;
+    }
+
+    window.scrollTo(0, 0);
+    await rest(STEP_MS);
+
+    // Images requested during the walk are still in flight; a clone of a
+    // half-decoded image is a clone of nothing.
+    var pending = Array.prototype.filter.call(document.images, function (image) { return !image.complete; });
+    await Promise.race([
+      Promise.all(pending.map(function (image) {
+        return new Promise(function (done) {
+          image.addEventListener('load', done, { once: true });
+          image.addEventListener('error', done, { once: true });
+        });
+      })),
+      rest(4000),
+    ]);
+
+    if (document.fonts && document.fonts.ready) await Promise.race([document.fonts.ready, rest(2000)]);
+
+    return {
+      steps: steps,
+      height: document.documentElement.scrollHeight,
+      imagesAwaited: pending.length,
+      elapsed: Math.round(performance.now() - start),
+    };
+  })();
 })();
 `;

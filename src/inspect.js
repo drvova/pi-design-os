@@ -26,7 +26,7 @@ import { collectSlices, writeSlices } from './slices.js';
 import { openPage } from './cdp.js';
 import { CommandError } from './envelope.js';
 import { toDirection } from './extract.js';
-import { HARVEST, PROBE, resolveTokens } from './probe.js';
+import { HARVEST, PROBE, REVEAL, resolveTokens } from './probe.js';
 
 /** Fixed viewport: area-weighted colour extraction is only comparable at a fixed size. */
 const VIEWPORT = { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false };
@@ -378,6 +378,19 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
     // Last, and only last. Snapshotting writes the CSSOM back into the DOM and
     // mirrors field state onto attributes; running it any earlier would put its
     // own mutations into the measurements above.
+    // Only now, and only when copying. Walking the page makes lazy images load
+    // and reveal observers fire, which is what a complete copy needs and what a
+    // faithful measurement must not include: everything above was recorded
+    // before this ran, so the pipeline report still describes the page's own
+    // behaviour rather than the tool's.
+    let revealed = null;
+    if (clone) {
+      const walked = await session
+        .send('Runtime.evaluate', { expression: REVEAL, returnByValue: true, awaitPromise: true })
+        .catch((error) => ({ exceptionDetails: { text: error.message } }));
+      revealed = walked.exceptionDetails ? { failed: walked.exceptionDetails.text } : walked.result.value;
+    }
+
     // Detection marks the nodes and the CSS domain answers about them, so both
     // must happen while the document is still live and before it is serialized.
     const detected = clone?.slices ? await collectSlices(session) : null;
@@ -591,6 +604,8 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
       clone: cloned && {
         ...cloned,
         attachShadowCalls: probe.apis.attachShadow?.total ?? 0,
+        revealed,
+        preservedBuffers: probe.preservedBuffers ?? 0,
         slices: sliced ? { found: detected.slices.length, written: sliced.length } : null,
         // Carried for the crawl's final pass, not for the report.
         replacements: undefined,
