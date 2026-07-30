@@ -1,30 +1,16 @@
 {
   "name": "design-os",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
+  "version": "0.1.0",
   "description": "Explore design directions from your coding agent, and read them off real sites. Local-first.",
   "license": "MIT",
-  "bin": {
-    "design-os": "bin/design-os.js",
-    "design-os-mcp": "bin/design-os-mcp.js"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/drvova/design-os.git"
   },
-  "scripts": {
-    "test": "node --test",
-    "directions": "node bin/design-os.js directions",
-    "inspect": "node bin/design-os.js inspect",
-    "mcp": "node bin/design-os.js mcp"
+  "homepage": "https://github.com/drvova/design-os#readme",
+  "bugs": {
+    "url": "https://github.com/drvova/design-os/issues"
   },
-  "engines": {
-    "node": ">=22.13"
-  },
-  "files": [
-    "bin",
-    "src",
-    "extensions",
-    "skills",
-    "examples"
-  ],
   "keywords": [
     "pi-package",
     "pi-extension",
@@ -33,6 +19,14 @@
     "chrome-devtools-protocol",
     "feature-sliced-design"
   ],
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "design-os": "bin/design-os.js",
+    "design-os-mcp": "bin/design-os-mcp.js"
+  },
   "pi": {
     "extensions": [
       "./extensions/design-os.js"
@@ -47,6 +41,20 @@
     "command": "design-os-mcp",
     "args": []
   },
+  "scripts": {
+    "test": "node --test",
+    "directions": "node bin/design-os.js directions",
+    "inspect": "node bin/design-os.js inspect",
+    "mcp": "node bin/design-os.js mcp"
+  },
+  "files": [
+    "LICENSE",
+    "bin",
+    "examples",
+    "extensions",
+    "skills",
+    "src"
+  ],
   "optionalDependencies": {
     "element-source": "^0.0.5"
   }
