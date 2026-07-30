@@ -311,8 +311,9 @@ Puppeteer and no Playwright; `npm test` runs 37 checks on stdlib `node:test`, in
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
 exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back
 through the served copy, and a Feature-Sliced run asserting that a slice carries the rules
-that matched it and none that did not. Total: 48 checks, including one that asserts the native and MCP surfaces are the same
-object rather than two copies of it.
+that matched it and none that did not. Total: 55 checks, including one that asserts the native and MCP surfaces are the same
+object rather than two copies of it, and one that asserts a degraded capture is drawn above
+the verdict it invalidates.
 
 ## Pi
 
@@ -334,8 +335,38 @@ envelope's wire code kept in the message because that is the part a caller can
 act on.
 
 ```bash
-npm install -g design-os      # or: pi install design-os
+pi install ./design-os        # or: pi install npm:design-os
+pi remove ./design-os         # reversible
 ```
+
+Four things make the package native rather than merely reachable.
+
+**Tools.** `design_inspect`, `design_clone` and `design_directions`, registered
+from the shared declaration.
+
+**Commands**, so the work can be run without spending a model turn:
+
+| Command | |
+| --- | --- |
+| `/design-inspect <url>` | read a url's pipeline and design |
+| `/design-clone <url> [routes] [fsd\|flat]` | clone or crawl a site |
+| `/design-directions [count] [seed]` | generate directions |
+| `/design-doctor` | check node, the global `WebSocket`, and the Chrome binary |
+
+Pi has passed command arguments as `(args, ctx)` and as `(ctx)` across versions,
+so both shapes are accepted rather than one being assumed.
+
+**Renderers.** A clone report is hundreds of kilobytes of JSON, so the tool draws
+six lines instead: routes, slices, links, fidelity, artefact paths. A degraded
+capture is printed first, above the styling verdict, because a page whose scripts
+were blocked looks exactly like a static CSS page and the warning cannot sit
+below the number it invalidates. The renderer degrades to Pi's own output rather
+than throwing when given anything it does not recognise.
+
+**A shutdown hook.** This package starts real browsers. `src/cdp.js` keeps a
+registry of open sessions, and `session_shutdown` closes any that survive, so a
+Pi session ending mid-crawl cannot leave Chrome running and a profile directory
+on disk.
 
 The skill in `skills/design-os` tells the agent when to reach for each tool, and
 which fields to read first — `capture.degraded` before any conclusion drawn from

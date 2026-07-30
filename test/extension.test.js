@@ -4,15 +4,25 @@ import test from 'node:test';
 import designOs from '../extensions/design-os.js';
 import { TOOLS, runTool } from '../src/tools.js';
 
-/** Captures what the extension registers, the way Pi would. */
+/** Captures everything the extension registers, the way Pi would. */
 function load() {
-  const registered = new Map();
-  designOs({ registerTool: (tool) => registered.set(tool.name, tool) });
-  return registered;
+  const tools = new Map();
+  const commands = new Map();
+  const hooks = new Map();
+  designOs({
+    registerTool: (tool) => tools.set(tool.name, tool),
+    registerCommand: (name, spec) => commands.set(name, spec),
+    on: (event, handler) => hooks.set(event, handler),
+  });
+  return { tools, commands, hooks };
 }
 
+/** Pi calls a renderer with a theme and a component slot; both are optional. */
+const theme = { fg: (_key, text) => text, bold: (text) => text };
+const draw = (component, width = 100) => component.render(width).join('\n');
+
 test('the extension registers every declared tool', () => {
-  const registered = load();
+  const { tools: registered } = load();
   assert.deepEqual([...registered.keys()], TOOLS.map((tool) => tool.name));
 
   for (const [name, tool] of registered) {
@@ -25,7 +35,7 @@ test('the extension registers every declared tool', () => {
 });
 
 test('the native surface and the MCP surface are the same declaration', () => {
-  const registered = load();
+  const { tools: registered } = load();
   for (const declared of TOOLS) {
     const tool = registered.get(declared.name);
     // Not a copy: the identical object, so the two front ends cannot drift.
@@ -35,7 +45,7 @@ test('the native surface and the MCP surface are the same declaration', () => {
 });
 
 test('a tool returns its envelope as text', async () => {
-  const registered = load();
+  const { tools: registered } = load();
   const result = await registered.get('design_directions').execute('call-1', { count: 3, seed: 'monozukuri' });
 
   assert.equal(typeof result, 'string', 'Pi renders a tool result as text');
@@ -47,7 +57,7 @@ test('a tool returns its envelope as text', async () => {
 });
 
 test('a failing tool throws, carrying the wire code', async () => {
-  const registered = load();
+  const { tools: registered } = load();
   await assert.rejects(
     () => registered.get('design_clone').execute('call-2', { url: 'ftp://nope' }),
     (error) => {
@@ -78,4 +88,92 @@ test('the package points Pi at the extension and the skill', async () => {
   for (const folder of ['bin', 'src', 'extensions', 'skills']) {
     assert.ok(manifest.files.includes(folder), `${folder} must be published`);
   }
+});
+
+test('slash commands cover every tool plus a doctor', () => {
+  const { commands } = load();
+  assert.deepEqual(
+    [...commands.keys()].sort(),
+    ['design-clone', 'design-directions', 'design-doctor', 'design-inspect'],
+  );
+  for (const [name, spec] of commands) {
+    assert.equal(typeof spec.handler, 'function', `${name} needs a handler`);
+    assert.ok(spec.description.length > 10, `${name} needs a description`);
+  }
+});
+
+test('a command reads its arguments however Pi passes them', async () => {
+  const { commands } = load();
+  const clone = commands.get('design-clone');
+
+  // Both call shapes must reach the same place: a usage line, not a crash.
+  assert.match(await clone.handler('', {}), /^Usage: \/design-clone/);
+  assert.match(await clone.handler({ args: '' }), /^Usage: \/design-clone/);
+  assert.match(await clone.handler({}, { args: '' }), /^Usage: \/design-clone/);
+
+  // A bad url is reported, not thrown: a command result is text on screen.
+  const reported = await clone.handler('ftp://nope 3 fsd');
+  assert.match(reported, /design_clone failed — USAGE_ERROR/);
+  assert.match(reported, /only http and https/);
+});
+
+test('the doctor reports what a browser run needs', () => {
+  const { commands } = load();
+  const report = commands.get('design-doctor').handler();
+  assert.match(report, /node\s+v\d+/);
+  assert.match(report, /websocket\s+built in/);
+  assert.match(report, /chrome\s+\S+/);
+  assert.match(report, /design_inspect, design_clone, design_directions/);
+});
+
+test('a result renders as a summary, never as raw json', async () => {
+  const { tools } = load();
+  const directions = tools.get('design_directions');
+  const output = await directions.execute('call-3', { count: 2, seed: 'monozukuri' });
+
+  const drawn = draw(directions.renderResult(output, { isPartial: false }, theme, {}));
+  assert.match(drawn, /design_directions/);
+  assert.match(drawn, /2 directions · seed monozukuri/);
+  // The point of a renderer is that the blob does not reach the screen.
+  assert.ok(drawn.length < output.length / 4, `summary was ${drawn.length} of ${output.length} chars`);
+
+  const running = draw(directions.renderResult('', { isPartial: true }, theme, {}));
+  assert.match(running, /running/);
+});
+
+test('a renderer degrades rather than throwing on anything unexpected', () => {
+  const { tools } = load();
+  const render = tools.get('design_inspect').renderResult;
+
+  // No theme, no context, and output that is not an envelope.
+  assert.doesNotThrow(() => draw(render('not json at all', {}, undefined, undefined)));
+  assert.match(draw(render(JSON.stringify({ ok: false, error: { message: 'boom' } }), {}, theme, {})), /failed: boom/);
+
+  const call = tools.get('design_inspect').renderCall({ url: 'stripe.com' }, theme, {});
+  assert.match(draw(call), /design_inspect stripe\.com/);
+});
+
+test('a degraded capture leads the summary, above every other number', () => {
+  const { tools } = load();
+  const envelope = JSON.stringify({
+    ok: true,
+    data: {
+      capture: { degraded: true, failed: 12, requests: 15 },
+      finalUrl: 'https://example.com/',
+      styling: { verdict: { source: 'css', dynamicShare: 0 } },
+    },
+  });
+  const drawn = draw(tools.get('design_inspect').renderResult(envelope, {}, theme, {}));
+  const lines = drawn.split('\n');
+  // A blocked page looks exactly like a static css page, so the warning cannot
+  // sit below the verdict it invalidates.
+  assert.ok(lines.findIndex((l) => l.includes('degraded')) < lines.findIndex((l) => l.includes('css')));
+});
+
+test('browsers left open are closed when the session ends', async () => {
+  const { hooks } = load();
+  const shutdown = hooks.get('session_shutdown');
+  assert.equal(typeof shutdown, 'function', 'a package that starts browsers must clean them up');
+  // Nothing is open, so this must be a no-op rather than a failure.
+  await assert.doesNotReject(() => shutdown());
 });

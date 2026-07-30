@@ -22,6 +22,23 @@ import { join } from 'node:path';
 
 import { CommandError, progress } from './envelope.js';
 
+/**
+ * Every session that has not been closed yet.
+ *
+ * `inspectPage` closes in a `finally`, which covers a throw but not a host that
+ * stops the process mid-run. A Pi session ending during a crawl would otherwise
+ * leave Chrome running and a profile directory behind, so a host can close them
+ * all through `closeAllSessions`.
+ */
+const live = new Set();
+
+/** Closes every open session. Returns how many were still running. */
+export async function closeAllSessions() {
+  const open = [...live];
+  await Promise.all(open.map((session) => session.close()));
+  return open.length;
+}
+
 /** Searched in order; `CHROME_PATH` wins when set. */
 const CANDIDATES = [
   process.env.CHROME_PATH,
@@ -121,6 +138,7 @@ class Session {
     this.#socket = socket;
     this.#timeout = timeout;
     this.#closers = closers;
+    live.add(this);
     socket.addEventListener('message', (event) => this.#receive(event.data));
     socket.addEventListener('close', () => this.#rejectPending('CDP socket closed'));
     socket.addEventListener('error', () => this.#rejectPending('CDP socket errored'));
@@ -187,6 +205,7 @@ class Session {
   async close() {
     if (this.#closed) return;
     this.#closed = true;
+    live.delete(this);
     this.#rejectPending('session closing');
     this.#socket.close();
 
