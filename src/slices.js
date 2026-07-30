@@ -22,6 +22,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
 import { localise } from './clone.js';
+import { devProjectNotes } from './project.js';
 import { MATCH_SLICES, SLICES, SOURCE_NAMES } from './probe.js';
 
 /**
@@ -426,15 +427,7 @@ A local copy taken by design-os on ${manifest.capturedAt}, organised as
 [Feature-Sliced Design](https://feature-sliced.design). Every route was loaded in
 a real browser and the copy was loaded back and scored against it.
 
-## Running it
-
-The clone is a static tree. Serve the folder over http and open the root:
-
-\`\`\`bash
-npx serve ${manifest.dir.split('/').pop()}
-\`\`\`
-
-\`file://\` works for markup and images, but a browser refuses webfonts over it.
+${devProjectNotes(manifest.project).join('\n').replace(/^\n/, '')}
 
 ## Layout
 

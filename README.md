@@ -420,6 +420,40 @@ Two properties matter more than speed for a run measured in hours:
 The returned rows are summaries — fidelity, routes, slices, assets, the clone and
 report paths. The full report for each target is on disk.
 
+### A clone you can edit
+
+Every clone is written as a project: a `package.json` and a Vite config beside the
+markup, so it opens in a dev server that reloads a page when you edit its css.
+
+```sh
+npm install && npm run dev      # or: bun install && bun run dev
+npm run build                   # bundles every page into dist/
+```
+
+Nothing about the copy needs it — the pages are static and open from disk, and
+`design-os serve` still needs no install. The project is there for the loop:
+edit, see it, build it out.
+
+Every cloned route is a build entry, because a multi-page site has no single
+entry to infer, and a route reached from two pages is collapsed to one so the
+same file is not built twice. `appType: 'mpa'` is set deliberately: without it a
+missing page falls back to the entry, which hides a broken link rather than
+showing it. Slice previews are served in dev but are not build entries.
+
+This was measured before it was offered, on a three-route clone of svelte.dev.
+Served as plain files, served by the dev server, and served from `dist` after a
+build all score a fidelity of **1** against each other, with no weakest check —
+so neither the dev server nor the bundler changes what renders. The build emitted
+all four pages in 204ms.
+
+Vite is declared as the clone's dependency, never design-os's, so cloning
+installs nothing. `--no-vite` skips the two files.
+
+A mirror clone declines the project instead of half-serving it: a mirror runs the
+site's own scripts, and a dev server would try to rebuild a production bundle it
+did not produce, on urls that loader constructs at runtime. Serve a mirror over
+http instead — that is what makes it work.
+
 ### One at a time, and only work that fits
 
 Three guards, each of which exists because its absence caused a real failure.
@@ -616,7 +650,7 @@ Puppeteer and no Playwright; `npm test` runs 63 checks on stdlib `node:test`, in
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
 exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back
 through the served copy, and a Feature-Sliced run asserting that a slice carries the rules
-that matched it and none that did not. Total: 71 checks, including one that asserts the native and MCP surfaces are the same
+that matched it and none that did not. Total: 74 checks, including one that asserts the native and MCP surfaces are the same
 object rather than two copies of it, one that asserts a degraded capture is drawn above the
 verdict it invalidates, and one that asserts the two front ends never offer the same tool
 twice. The extension takes its config paths as an argument, so what a machine happens to

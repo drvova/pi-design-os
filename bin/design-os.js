@@ -48,6 +48,7 @@ batch options:
   --retry           re-clone targets already recorded as done
 
 clone options:
+  --no-vite         skip the package.json and Vite config a clone normally gets
   --routes <n>      routes to crawl breadth-first from the url    (default 1)
   --layout <l>      flat | fsd, Feature-Sliced Design tree         (default flat)
   --budget <mb>     asset size budget, lowest priority cut first  (default 40)
@@ -80,6 +81,7 @@ const OPTIONS = {
   gallery: { type: 'boolean', default: false },
   scripts: { type: 'boolean', default: false },
   'skip-verify': { type: 'boolean', default: false },
+  'no-vite': { type: 'boolean', default: false },
   open: { type: 'boolean', default: false },
   help: { type: 'boolean', default: false },
 };
@@ -108,8 +110,10 @@ async function main(argv) {
   if (!handler) throw usage(`unknown command "${command}". Known commands: ${KNOWN.join(', ')}`);
 
   // parseArgs keeps the dashed spelling; commands take one camelCase shape.
-  const { 'skip-verify': skipVerify, ...values } = parsed.values;
-  const envelope = await handler({ ...values, skipVerify, url: target });
+  // A negative flag reads well on a command line and badly in an option object,
+  // so it is turned the right way round once, here.
+  const { 'skip-verify': skipVerify, 'no-vite': noVite, ...values } = parsed.values;
+  const envelope = await handler({ ...values, skipVerify, vite: !noVite, url: target });
   const code = emit(envelope);
 
   // A served clone lives for as long as its process. The tool surfaces run

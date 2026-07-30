@@ -29,6 +29,7 @@ import {
 } from './clone.js';
 import { progress } from './envelope.js';
 import { inspectPage, normaliseUrl } from './inspect.js';
+import { writeDevProject } from './project.js';
 import { writeAppStyles, writeEntry, writeManifest, writeReadme, writeVariantTokens } from './slices.js';
 
 /** Linked, but never a page: following these wastes a browser launch. */
@@ -81,6 +82,15 @@ const mean = (numbers) => numbers.reduce((total, value) => total + value, 0) / n
  * @param {object} options
  * @returns {Promise<object>} manifest, with the entry route's full report
  */
+/** The site's own name, for the project the clone becomes. */
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return 'site';
+  }
+}
+
 export async function cloneSite({
   url,
   dir,
@@ -92,6 +102,7 @@ export async function cloneSite({
   screenshot = false,
   verify = true,
   layout = 'flat',
+  vite = true,
   modes = [],
 }) {
   const entry = normaliseUrl(url);
@@ -224,6 +235,14 @@ export async function cloneSite({
     assets: { unique: saved.size },
   };
 
+  // Both layouts get this: a flat clone is as worth editing as a sliced one.
+  // It goes last, when every route and asset is on disk, so the build entries
+  // it lists are files that exist.
+  const project = vite
+    ? await writeDevProject(dir, { name: hostOf(entry), routes: manifest.routes, mirror: scripts })
+    : { written: false, reason: 'not requested' };
+  manifest.project = project;
+
   if (layout === 'fsd') {
     await writeManifest(dir, manifest);
     await writeReadme(dir, manifest);
@@ -232,6 +251,7 @@ export async function cloneSite({
   return {
     dir,
     layout,
+    project,
     entry: layout === 'fsd' ? `${dir}/index.html` : entryReport.clone.entry,
     layers,
     slices: manifest.slices,

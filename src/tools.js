@@ -85,6 +85,13 @@ export const TOOLS = [
           maximum: 200,
           default: 1,
         },
+        vite: {
+          type: 'boolean',
+          description:
+            'Write a package.json and Vite config into the clone so it can be edited with `npm run dev` ' +
+            'or `bun run dev`, and built with `npm run build`. On by default. A mirror clone declines it, ' +
+            'because its own scripts are what make it run.',
+        },
         layout: {
           type: 'string',
           enum: ['flat', 'fsd'],

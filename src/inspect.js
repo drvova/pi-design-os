@@ -659,6 +659,9 @@ export async function inspectPage({
             initiator: asset.initiator,
             initiatorUrl: asset.initiatorUrl,
             fromCache: Boolean(asset.fromCache),
+            // The integrity block counts failures so a report can be distrusted.
+            // Without the reason here it named a failure nobody could then find.
+            failed: asset.failed ?? null,
             redirects: asset.redirects,
             phase: before(asset.startedAt)(domContentLoaded) ? 'before-domcontentloaded' : 'after-domcontentloaded',
           })),

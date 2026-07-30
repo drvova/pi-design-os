@@ -94,6 +94,18 @@ Languages are usually separate routes, so `routes` reaches them. A language or
 menu that only changes state without changing the url is not captured — say so
 rather than implying it was.
 
+## Handing over a clone
+
+A clone is written as a project. Tell the user they can edit it:
+
+```sh
+cd <clone dir> && npm install && npm run dev     # or bun
+```
+
+`design_serve` is still the way to just look at one — it needs no install. Use
+`vite: false` if the two extra files are unwanted. A mirror clone (`scripts:
+true`) reports `project.written: false`; serve that one, do not try to build it.
+
 ## Cost, and what will be refused
 
 A tool call has a deadline; roughly thirty seconds per route is the estimate. Ask

@@ -315,6 +315,8 @@ async function cloneOnce(options) {
     verify: !options.skipVerify,
     layout,
     modes: colourModes(options.modes),
+    // A clone is worth editing, so the project scaffolding is written unless refused.
+    vite: options.vite !== false,
   });
 
   const { entryReport: report, ...manifest } = site;
@@ -324,6 +326,7 @@ async function cloneOnce(options) {
   );
   if (site.slices?.length) progress(`Extracted ${site.slices.length} slices across ${new Set(site.slices.map((s) => s.layer)).size} layers`);
   if (site.fidelity) progress(`Fidelity ${Math.round(site.fidelity.score * 100)}% (lowest ${Math.round(site.fidelity.lowest * 100)}%)`);
+  if (site.project?.written) progress(`Wrote a Vite project over ${site.project.pages} page(s): npm install && npm run dev`);
 
   const stem = `${WORKSPACE}/${slug(report.finalUrl)}`;
   const artefacts = { clone: dir, entry: site.entry };
