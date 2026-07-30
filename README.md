@@ -517,8 +517,8 @@ envelope's wire code kept in the message because that is the part a caller can
 act on.
 
 ```bash
-pi install ./design-os        # or: pi install npm:design-os
-pi remove ./design-os         # reversible
+pi install git:github.com/drvova/pi-design-os
+pi remove git:github.com/drvova/pi-design-os   # reversible
 ```
 
 Four things make the package native rather than merely reachable.
