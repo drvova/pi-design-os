@@ -1114,3 +1114,100 @@ export const REVEAL = `
   })();
 })();
 `;
+
+/**
+ * Which rules apply inside each marked slice, resolved in one pass.
+ *
+ * Asking the CSS domain per node is exact but costs one round trip each, and on
+ * a page of this size that measured 80ms a call: fifty slices of a few hundred
+ * nodes is twenty thousand calls, which is twenty-six minutes of waiting that
+ * looks indistinguishable from a hang.
+ *
+ * Inverted, it is one pass over the rules instead. The browser's own selector
+ * engine answers "what does this rule match" once per rule, and each match is
+ * walked up to the slices that contain it — so every node is still considered,
+ * with no sampling, and the whole thing is a single evaluation.
+ *
+ * A rule is attributed to every enclosing slice, not just the nearest: a button
+ * inside a header belongs to the button's own folder and to the header's.
+ */
+export const MATCH_SLICES = `
+(function () {
+  var MARKER = 'data-design-os-slice';
+
+  // Pseudo-elements cannot be matched, and a dynamic pseudo-class would match
+  // nothing right now even though the rule is part of the component. Both are
+  // stripped for the purpose of finding the rule's targets.
+  var DYNAMIC = /::?(?:before|after|placeholder|selection|backdrop|marker|first-line|first-letter|file-selector-button|-webkit-[a-z-]+)|:(?:hover|focus|focus-visible|focus-within|active|visited|target|any-link|autofill)\\b/g;
+
+  function targetable(selector) {
+    var stripped = selector.replace(DYNAMIC, '').replace(/\\s*[>+~]\\s*$/, '').trim();
+    return stripped === '' ? null : stripped;
+  }
+
+  var flat = [];
+  function walk(rules, conditions) {
+    for (var i = 0; i < rules.length && flat.length < 20000; i += 1) {
+      var rule = rules[i];
+      if (rule.cssRules && rule.cssRules.length) {
+        // @media, @supports, @layer and @container all nest.
+        var condition = rule.conditionText || (rule.media && rule.media.mediaText) || '';
+        var isKeyframes = String(rule.cssText || '').lastIndexOf('@keyframes', 0) === 0;
+        if (!isKeyframes) walk(rule.cssRules, condition ? conditions.concat(condition) : conditions);
+      } else if (rule.selectorText && rule.style && rule.style.cssText) {
+        flat.push({ selector: rule.selectorText, body: rule.style.cssText, conditions: conditions });
+      }
+    }
+  }
+
+  for (var s = 0; s < document.styleSheets.length; s += 1) {
+    try { walk(document.styleSheets[s].cssRules, []); } catch (error) { /* cross-origin sheet */ }
+  }
+
+  var perSlice = Object.create(null);
+  var shell = [];
+  var seen = Object.create(null);
+
+  function emit(bucket, rule, key) {
+    if (!seen[bucket]) seen[bucket] = Object.create(null);
+    if (seen[bucket][key]) return;
+    seen[bucket][key] = 1;
+    (perSlice[bucket] = perSlice[bucket] || []).push(rule);
+  }
+
+  for (var r = 0; r < flat.length; r += 1) {
+    var rule = flat[r];
+    var key = rule.conditions.join('&') + '|' + rule.selector + '|' + rule.body;
+
+    // A rule that addresses the document belongs to the app layer, wherever it
+    // matches: a universal selector matches every node on the page.
+    var parts = rule.selector.split(',').map(function (p) { return p.trim(); });
+    var documentScoped = parts.every(function (p) {
+      return /^(\\*|html|body|:root|:where\\(html\\)|:where\\(body\\))$/.test(p.replace(DYNAMIC, '').trim());
+    });
+    if (documentScoped) {
+      if (!seen.__shell__) seen.__shell__ = Object.create(null);
+      if (!seen.__shell__[key]) { seen.__shell__[key] = 1; shell.push(rule); }
+      continue;
+    }
+
+    var lookup = targetable(rule.selector);
+    if (!lookup) continue;
+
+    var matched;
+    try { matched = document.querySelectorAll(lookup); } catch (error) { continue; }
+
+    for (var m = 0; m < matched.length; m += 1) {
+      // Every enclosing slice, not just the nearest one.
+      var node = matched[m];
+      while (node && node.nodeType === 1) {
+        var marker = node.getAttribute && node.getAttribute(MARKER);
+        if (marker) emit(marker, rule, key);
+        node = node.parentElement;
+      }
+    }
+  }
+
+  return { slices: perSlice, shell: shell, rulesConsidered: flat.length };
+})();
+`;

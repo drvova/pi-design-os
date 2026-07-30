@@ -256,12 +256,19 @@ manifest.json  README.md
 Each slice folder carries `ui/ui.html`, `ui/styles.css`, `ui/preview.html` and a
 `meta.json`.
 
-**The stylesheet beside a component is only that component's.** Every node in a
-slice is put to `CSS.getMatchedStylesForNode`, so the browser decides what
-applies rather than a selector search. Rules that address the document itself
-are held back, because a universal selector matches every node and Tailwind's
+**The stylesheet beside a component is only that component's.** The browser's own
+selector engine decides what applies: every rule is tested once, and each match
+is walked up to the slices that contain it, so a button inside a header belongs
+to the button's folder and to the header's. Rules that address the document are
+held back, because a universal selector matches every node and Tailwind's
 preflight would otherwise be copied under all seventy-odd components with no
 single home.
+
+Asking the CSS domain per node is equally exact and costs a round trip each,
+which measured 80ms on `tailwindcss.com`: fifty slices of a few hundred nodes is
+twenty thousand calls and twenty-six minutes of waiting that is indistinguishable
+from a hang. Inverting it is one message, no node is sampled away, and the same
+page finishes in 24 seconds.
 
 `preview.html` reproduces the captured `html` and `body` attributes. Those are
 not decoration: a theme class sits on `html` and font-loader classes sit on
@@ -326,15 +333,16 @@ that had nothing to do with Next.
 | `htmx.org` | HTMX, no build step | 2 | 100% | 49 |
 | `svelte.dev` | SvelteKit | 2 | 100% | 53 |
 
-Every stack above clones at 100% with a clean replica load.
+Eight stacks, every one at 100%, each under 40 seconds with `--layout fsd`.
 
-**One open failure.** `tailwindcss.com` with `--layout fsd` blocks: near-zero CPU
-against a wall clock that keeps running, so it is waiting rather than working.
-The same page clones in 16 seconds at `--layout flat` with a fidelity of 1.0 and
-nothing failing, so the fault is in slice extraction on a page of that size, not
-in the copy. Capping the nodes asked per slice did not resolve it, and the cause
-is not yet known. Recorded here rather than left out, because a table of only the
-runs that worked is not evidence.
+### Scoring like against like
+
+A copy is taken after the page has been walked, so it holds lazy content the
+first reading never saw. Scored against that first reading it loses marks for
+being the more complete of the two — stripe.com came out at 65% on element count
+while its own two consecutive loads agreed to the element. The design is
+therefore read a second time after the walk, purely for scoring; every number in
+the pipeline report still comes from the reading taken before it.
 
 ### What a clone is not
 

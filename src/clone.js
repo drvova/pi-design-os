@@ -571,8 +571,13 @@ function overlap(wanted, got, colour = false) {
  * which is what the clone was made to preserve.
  */
 export function compareDesign(original, clone) {
-  const a = original.direction.observed;
-  const b = clone.direction.observed;
+  // A copy is taken after the page has been walked, so it is scored against the
+  // reading taken then rather than the one taken before. Comparing a complete
+  // copy to a partial measurement penalises it for being complete.
+  const left = original.comparable ?? original;
+  const right = clone.comparable ?? clone;
+  const a = left.direction.observed;
+  const b = right.direction.observed;
 
   const checks = {
     surface: sameColour(a.surface.hex, b.surface.hex) ? 1 : 0,
@@ -582,11 +587,11 @@ export function compareDesign(original, clone) {
     typeScale: a.typeScale.ratio === b.typeScale.ratio ? 1 : 0,
     radii: overlap(a.radii.slice(0, 3), b.radii),
     spacing: overlap(a.spacing.slice(0, 4), b.spacing),
-    polarity: original.direction.axes.polarity === clone.direction.axes.polarity ? 1 : 0,
-    elements: ratio(original.runtime.layout.elements, clone.runtime.layout.elements),
-    depth: ratio(original.runtime.layout.maxDepth, clone.runtime.layout.maxDepth),
-    grids: ratio(original.runtime.layout.grids, clone.runtime.layout.grids),
-    flexes: ratio(original.runtime.layout.flexes, clone.runtime.layout.flexes),
+    polarity: left.direction.axes.polarity === right.direction.axes.polarity ? 1 : 0,
+    elements: ratio(left.runtime?.layout?.elements ?? left.layout?.elements, right.runtime?.layout?.elements ?? right.layout?.elements),
+    depth: ratio(left.runtime?.layout?.maxDepth ?? left.layout?.maxDepth, right.runtime?.layout?.maxDepth ?? right.layout?.maxDepth),
+    grids: ratio(left.runtime?.layout?.grids ?? left.layout?.grids, right.runtime?.layout?.grids ?? right.layout?.grids),
+    flexes: ratio(left.runtime?.layout?.flexes ?? left.layout?.flexes, right.runtime?.layout?.flexes ?? right.layout?.flexes),
   };
 
   const scores = Object.values(checks);

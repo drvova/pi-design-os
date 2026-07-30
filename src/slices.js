@@ -20,37 +20,9 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { localise } from './clone.js';
-import { SLICES } from './probe.js';
-
-/** Rules the browser supplies itself are not part of the design. */
-const AUTHORED = new Set(['regular', 'author', 'inspector', 'injected']);
+import { MATCH_SLICES, SLICES } from './probe.js';
 
 const MARKER = 'data-design-os-slice';
-
-/**
- * Nodes asked about per slice.
- *
- * Matched styles cost one round trip per node, so a page-sized slice on a large
- * site turns into thousands of them and the run stops looking like it is doing
- * anything. The rules a component uses saturate long before this: the sample is
- * taken across the subtree rather than off the front, so a deep tail is
- * represented, and any slice that hits the cap says so in its `meta.json`.
- */
-const MAX_NODES_PER_SLICE = 400;
-
-/**
- * Selectors that address the document rather than a component.
- *
- * A universal selector matches every node, so the CSS domain returns Tailwind's
- * preflight for every slice on the page. Those rules are the app layer's, and
- * repeating them under all 71 components would bury each one's own handful of
- * rules and leave the reset with no single home. Previews link the app styles,
- * so nothing is lost by removing them here.
- */
-const DOCUMENT_SCOPED = /^(\*|html|body|:root|::?before|::?after|:where\(html\)|:where\(body\))$/;
-
-const isDocumentScoped = (selector) =>
-  selector.split(',').every((part) => DOCUMENT_SCOPED.test(part.trim()));
 
 /** `shared` holds segments directly, so its slices live under the `ui` segment. */
 export const markerToDir = (marker) => (marker.startsWith('shared/') ? `shared/ui/${marker.slice(7)}` : marker);
@@ -62,105 +34,60 @@ async function write(root, relative, contents) {
   return relative;
 }
 
+/** Declarations for one rule, wrapped in whatever conditions it sits under. */
+function declaration({ selector, body, conditions }) {
+  const block = `${selector} {\n  ${body.trim().replace(/;\s*/g, ';\n  ').trim()}\n}`;
+  return conditions.reduceRight(
+    (inner, condition) =>
+      `${condition.startsWith('@') ? condition : `@media ${condition}`} {\n${inner.replace(/^/gm, '  ')}\n}`,
+    block,
+  );
+}
+
+/** Rules to a stylesheet, with the custom properties they reach for. */
+function stylesheet(rules = []) {
+  const css = rules.map(declaration).join('\n\n');
+  return {
+    css,
+    rules: rules.length,
+    variables: [...new Set([...css.matchAll(/var\(\s*(--[\w-]+)/g)].map((match) => match[1]))].sort(),
+  };
+}
+
 /**
  * Detects slices and resolves the css for each, against the live document.
  *
  * This has to run before the page is serialized: detection marks the nodes, and
- * the CSS domain can only answer about a document that still exists. Writing
+ * a selector can only be tested against a document that still exists. Writing
  * happens later, once the asset map is known and references can be rewritten.
  */
 export async function collectSlices(session) {
   const result = await session.send('Runtime.evaluate', { expression: SLICES, returnByValue: true });
   if (result.exceptionDetails) throw new Error(`slice detection failed: ${result.exceptionDetails.text}`);
 
-  // The detector already applies its own thresholds, and a leaf control has no
-  // element children by definition: a node count gate here would drop every
-  // shared primitive, which is the layer that exists to hold them.
   const { shell = { html: {}, body: {} }, slices = [] } = result.result.value ?? {};
   const detected = slices.filter((slice) => slice.html);
   if (detected.length === 0) return { shell, slices: [] };
 
-  const documentNode = await session.send('DOM.getDocument', { depth: 1 });
-  const collected = [];
+  // One evaluation for every slice at once.
+  //
+  // Asking the CSS domain which rules match a node is exact, and it costs a
+  // round trip per node: measured at 80ms on a page of this size, fifty slices
+  // of a few hundred nodes each is twenty thousand calls and twenty-six minutes
+  // of waiting that is indistinguishable from a hang. Inverted, the browser's
+  // own selector engine answers once per rule, no node is sampled away, and the
+  // whole thing is one message.
+  const matched = await session.send('Runtime.evaluate', { expression: MATCH_SLICES, returnByValue: true });
+  if (matched.exceptionDetails) throw new Error(`slice matching failed: ${matched.exceptionDetails.text}`);
 
-  for (const slice of detected) {
-    const matched = await matchedCss(session, documentNode.root.nodeId, `[${MARKER}="${slice.marker}"]`);
-    collected.push({ ...slice, ...matched });
-  }
-
-  // What styles the document itself. A class-based body rule such as
-  // `.font-sans` is neither a slice's rule nor a selector starting with `body`,
-  // so neither the per-slice pass nor a text scan would ever find it, and every
-  // preview would render in the fallback serif.
-  const shellCss = await matchedCss(session, documentNode.root.nodeId, 'html, body', { keepDocumentScoped: true });
-
-  return { shell: { ...shell, css: shellCss.css, rules: shellCss.rules }, slices: collected };
-}
-
-/**
- * The css that actually applies to one marked subtree.
- *
- * Every node under the root is asked separately, because a rule matching a
- * descendant is part of the component even when nothing selects the root.
- */
-async function matchedCss(session, documentId, marker, { keepDocumentScoped = false } = {}) {
-  const roots = await session.send('DOM.querySelectorAll', { nodeId: documentId, selector: marker });
-  if (roots.nodeIds.length === 0) return { css: '', rules: 0, variables: [] };
-
-  // The shell is two nodes; a slice is a root and everything beneath it.
-  let truncated = false;
-  let targets = roots.nodeIds;
-
-  if (!keepDocumentScoped) {
-    const inside = (await session.send('DOM.querySelectorAll', { nodeId: roots.nodeIds[0], selector: '*' })).nodeIds;
-    let sampled = inside;
-    if (inside.length > MAX_NODES_PER_SLICE) {
-      truncated = true;
-      const stride = inside.length / MAX_NODES_PER_SLICE;
-      sampled = Array.from({ length: MAX_NODES_PER_SLICE }, (_, index) => inside[Math.floor(index * stride)]);
-    }
-    targets = [roots.nodeIds[0], ...sampled];
-  }
-
-  const seen = new Set();
-  const blocks = [];
-
-  for (const nodeId of targets) {
-    const matched = await session
-      .send('CSS.getMatchedStylesForNode', { nodeId })
-      .catch(() => null);
-    if (!matched) continue;
-
-    for (const entry of matched.matchedCSSRules ?? []) {
-      const rule = entry.rule;
-      if (!AUTHORED.has(rule.origin)) continue;
-
-      const selector = rule.selectorList?.text ?? '';
-      const body = rule.style?.cssText?.trim();
-      if (!selector || !body) continue;
-      if (!keepDocumentScoped && isDocumentScoped(selector)) continue;
-
-      const conditions = (rule.media ?? []).map((query) => query.text).filter(Boolean);
-      const key = `${conditions.join('&')}|${selector}|${body}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-
-      const declaration = `${selector} {\n  ${body.replace(/;\s*/g, ';\n  ').trim()}\n}`;
-      blocks.push(
-        conditions.reduceRight((inner, condition) => `@media ${condition} {\n${inner.replace(/^/gm, '  ')}\n}`, declaration),
-      );
-    }
-  }
-
-  const css = blocks.join('\n\n');
+  const { slices: perSlice = {}, shell: shellRules = [], rulesConsidered = 0 } = matched.result.value ?? {};
   return {
-    css,
-    rules: blocks.length,
-    nodesAsked: targets.length,
-    truncated,
-    variables: [...new Set([...css.matchAll(/var\(\s*(--[\w-]+)/g)].map((match) => match[1]))].sort(),
+    shell: { ...shell, ...stylesheet(shellRules) },
+    rulesConsidered,
+    slices: detected.map((slice) => ({ ...slice, ...stylesheet(perSlice[slice.marker]) })),
   };
 }
+
 
 /**
  * Splits the site's stylesheets into the three things an app layer owns.
@@ -270,7 +197,7 @@ export async function writeSlices(root, { shell, slices }, { ledger, replacement
     }
     taken.add(dir);
     const depth = dir.split('/').length + 1;
-    const { css, rules, variables, nodesAsked, truncated } = slice;
+    const { css, rules, variables } = slice;
 
     const markup = localise(slice.html, `${dir}/ui/ui.html`, origin, replacements);
     const styles = localise(css, `${dir}/ui/styles.css`, origin, replacements);
@@ -284,8 +211,6 @@ export async function writeSlices(root, { shell, slices }, { ledger, replacement
       instances: slice.instances,
       nodes: slice.descendants + 1,
       rules,
-      nodesAsked,
-      truncated,
       variables,
       bytes: { markup: markup.length, styles: styles.length },
       routes: [routeMarker],

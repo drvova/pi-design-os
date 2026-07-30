@@ -392,6 +392,26 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
       revealed = walked.exceptionDetails ? { failed: walked.exceptionDetails.text } : walked.result.value;
     }
 
+    // The design is read a second time once the page has been walked.
+    //
+    // Everything reported above was measured before the walk, which is right for
+    // a pipeline report and wrong for a comparison: the copy is taken after the
+    // walk, so it holds the lazy content the first reading never saw. Scoring one
+    // against the other marks the copy down for being the more complete of the
+    // two — stripe.com came out at 65% on element count while its own two loads
+    // agree exactly.
+    let comparable = null;
+    if (revealed && !revealed.failed) {
+      const after = await session.send('Runtime.evaluate', { expression: HARVEST, returnByValue: true });
+      if (!after.exceptionDetails) {
+        const complete = after.result.value;
+        comparable = {
+          direction: toDirection(complete.design, { url: complete.document.url, title: complete.document.title }),
+          layout: complete.layout,
+        };
+      }
+    }
+
     // Detection marks the nodes and the CSS domain answers about them, so both
     // must happen while the document is still live and before it is serialized.
     const detected = clone?.slices ? await collectSlices(session) : null;
@@ -603,6 +623,8 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
 
       stack: harvest.stack,
       links: harvest.links,
+      // Used only for scoring a copy, never for the report above.
+      comparable,
       clone: cloned && {
         ...cloned,
         attachShadowCalls: probe.apis.attachShadow?.total ?? 0,
