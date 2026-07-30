@@ -102,6 +102,9 @@ test('a clone carries CSS that only ever existed in the CSSOM', async (t) => {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><circle cx="4" cy="4" r="4" fill="#533afd"/></svg>';
   const bodies = {
     '/': [page, 'text/html'],
+    // Requested by the browser, not by the markup, so Chrome files it under
+    // the resource type `Other` and a type-only filter never saves it.
+    '/favicon.ico': ['\u0000\u0000\u0001\u0000', 'image/x-icon'],
     '/base.css?v=2': [base, 'text/css'],
     '/inject.js': [inject, 'text/javascript'],
     '/dot.svg': [svg, 'image/svg+xml'],
@@ -151,6 +154,7 @@ test('a clone carries CSS that only ever existed in the CSSOM', async (t) => {
     assert.equal(files.filter((file) => file.endsWith('.css')).length, 1);
     assert.equal(files.filter((file) => file.endsWith('.svg')).length, 1);
     assert.equal(files.filter((file) => file.endsWith('.js')).length, 1, 'scripts are saved even when disabled');
+    assert.equal(files.filter((file) => file.endsWith('.ico')).length, 1, 'an asset typed Other is saved on its mime type');
     for (const file of files) {
       assert.ok(resolve(dir, file).startsWith(resolve(dir) + sep), `${file} escapes the output directory`);
     }

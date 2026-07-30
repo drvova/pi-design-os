@@ -34,6 +34,20 @@ const PRIORITY = ['Stylesheet', 'Font', 'Image', 'Document', 'Media', 'Manifest'
 /** Rewritten as text rather than copied as bytes. */
 const TEXTUAL = new Set(['Stylesheet', 'Document']);
 
+/**
+ * Assets Chrome files under `Other`.
+ *
+ * Resource type records why a request happened, not what came back. A favicon
+ * is fetched by the browser rather than by the markup, so it arrives as `Other`
+ * and a type-only filter drops it — the clone then 404s on every load. Taking
+ * all of `Other` would sweep in beacons and violation reports, so the response's
+ * own mime type decides.
+ */
+const ASSET_MIME = /^(?:image|font|audio|video)\/|^text\/css|^application\/(?:font|manifest)/i;
+
+const isAsset = (asset) =>
+  PRIORITY.includes(asset.type) || (asset.type === 'Other' && ASSET_MIME.test(String(asset.mimeType)));
+
 /** Extensionless urls need one, or the local server cannot type the response. */
 const EXTENSION_FOR = {
   'text/css': '.css',
@@ -202,13 +216,14 @@ export async function captureClone(session, {
   const savable = assets
     .filter(
       (asset) =>
-        PRIORITY.includes(asset.type) &&
+        isAsset(asset) &&
         !asset.failed &&
         asset.url.startsWith('http') &&
         // The main document is replaced by the rendered snapshot, not copied.
         asset.url !== pageUrl,
     )
-    .sort((a, b) => PRIORITY.indexOf(a.type) - PRIORITY.indexOf(b.type));
+    // An untyped asset sits with images: wanted, but after stylesheets and fonts.
+    .sort((a, b) => (PRIORITY.indexOf(a.type) + 1 || 3) - (PRIORITY.indexOf(b.type) + 1 || 3));
 
   const pageOrigin = new URL(pageUrl).origin;
   const written = [];
