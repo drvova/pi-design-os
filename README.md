@@ -325,6 +325,33 @@ count. With nothing installed the inferred chain applies unchanged, so design-os
 still runs with no dependencies at all — installing this one pulls `bippy` with
 it, which is the whole reason it is optional rather than required.
 
+### Reaching a clone without a shell
+
+Cloning is half the job: a clone has to be looked at and read from, and both were
+shell work until they were tools.
+
+```
+design_clone  { url: "emilkowal.ski", layout: "fsd" }
+design_slices { dir: "emilkowal.ski" }                     every slice, by layer
+design_slices { dir: "emilkowal.ski", name: "site-header" } markup + its own css
+design_serve  { dir: "emilkowal.ski" }                     http://127.0.0.1:37007/
+design_serve  { stop: true }                               closes every one
+```
+
+Either takes a directory or the site the clone came from, so `emilkowal.ski` finds
+what `design_clone` wrote without the caller having to know the naming rule; when
+it finds nothing it names the clones that do exist rather than only saying no.
+
+A server is **registered, not spawned and forgotten**. Asking twice for the same
+clone returns the same url instead of a second port, `stop` closes one, and
+`session_shutdown` closes every one alongside the browsers. That guard is not
+speculative: two throwaway static servers written during development each outlived
+the wrapper that reported them stopped, and each held a port until it was hunted
+down by pid — the same failure `src/cdp.js` keeps a session registry to avoid.
+
+The CLI has the same commands, and `design-os serve` waits rather than exiting,
+because a served clone lives exactly as long as its process.
+
 ### Verification
 
 A clone nobody loaded is a claim. Unless `--skip-verify` is passed, the copy is
@@ -426,11 +453,11 @@ skills/            when the agent should reach for each tool
 
 No required dependencies; `element-source` is optional and only for naming slices after
 their real source files. Node 22 ships a global `WebSocket`, so driving Chrome needs no
-Puppeteer and no Playwright; `npm test` runs 37 checks on stdlib `node:test`, including a
+Puppeteer and no Playwright; `npm test` runs 63 checks on stdlib `node:test`, including a
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
 exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back
 through the served copy, and a Feature-Sliced run asserting that a slice carries the rules
-that matched it and none that did not. Total: 59 checks, including one that asserts the native and MCP surfaces are the same
+that matched it and none that did not. Total: 63 checks, including one that asserts the native and MCP surfaces are the same
 object rather than two copies of it, one that asserts a degraded capture is drawn above the
 verdict it invalidates, and one that asserts the two front ends never offer the same tool
 twice. The extension takes its config paths as an argument, so what a machine happens to
@@ -533,6 +560,8 @@ to offer a slash command, and no way to close a browser this package started.
 | Tool | Purpose |
 | --- | --- |
 | `design_inspect` | Load a url once and report its rendering pipeline and its design. |
+| `design_serve` | Serve a clone and return its url. Registered, reused, closable. |
+| `design_slices` | List the components a clone extracted, or return one in full. |
 | `design_clone` | Copy a url, or crawl a site, then load every route back and score it. `layout: "fsd"` emits a Feature-Sliced tree with components extracted. |
 | `design_directions` | Generate deterministic directions and write a gallery. |
 

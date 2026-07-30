@@ -11,6 +11,8 @@ Three tools, all backed by one headless-Chrome load per route.
 | --- | --- |
 | `design_inspect` | "how is this site built", "what does it use", "read the design off this" |
 | `design_clone` | "clone it", "copy it", "extract the components", "rebuild this" |
+| `design_serve` | "let me see it", "open the clone", "show me in the browser" |
+| `design_slices` | "what components did it find", "show me the button", "that card's css" |
 | `design_directions` | "give me design directions", "explore some palettes" |
 
 ## Reading a site
@@ -72,6 +74,22 @@ Under `layout: "fsd"` each slice folder holds `ui/ui.html`, `ui/styles.css`
 `meta.json`. Check `meta.json.namedBy` before trusting a slice name: `tag` means
 the markup offered nothing more specific, so describe it by what it is rather
 than repeating an inferred name as fact.
+
+## After a clone
+
+Do not shell out to read or serve a clone; both are tools.
+
+```
+design_slices { dir: "stripe.com" }                       list every slice by layer
+design_slices { dir: "stripe.com", name: "site-header" }  markup + only its own css
+design_serve  { dir: "stripe.com" }                       returns a url to open
+design_serve  { stop: true }                              closes every server
+```
+
+Both accept the site name as well as a path. `design_serve` reuses an existing
+server rather than opening a second port, and every server closes on session
+shutdown — but close one yourself when finished rather than leaving it holding a
+port for the rest of the session.
 
 ## Reporting results
 
