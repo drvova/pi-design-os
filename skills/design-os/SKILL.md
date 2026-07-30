@@ -62,6 +62,11 @@ Verification runs by default: the copy is served over http, put through the
 identical analysis, and scored against the original. Report `fidelity.score`
 and `fidelity.lowest` — the average hides a single broken route.
 
+If `meta.json` carries a `sourceFile`, the slice is named after the author's own
+component and that path is where it is defined — say so rather than describing it.
+That only resolves against a dev server; a production build strips the metadata,
+so its absence is normal and not a failure to report.
+
 Under `layout: "fsd"` each slice folder holds `ui/ui.html`, `ui/styles.css`
 (**only** the rules that matched that subtree), `ui/preview.html` and a
 `meta.json`. Check `meta.json.namedBy` before trusting a slice name: `tag` means

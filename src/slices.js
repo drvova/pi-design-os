@@ -16,11 +16,61 @@
  * each with a `ui` segment.
  */
 
+import { readFile } from 'node:fs/promises';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
 import { localise } from './clone.js';
-import { MATCH_SLICES, SLICES } from './probe.js';
+import { MATCH_SLICES, SLICES, SOURCE_NAMES } from './probe.js';
+
+/**
+ * The browser build of `element-source`, if it is installed.
+ *
+ * Optional on purpose. It resolves a component's own name and source file from
+ * framework internals, which is a better name for a folder than anything markup
+ * can imply — and a production bundle strips the metadata it reads, so it
+ * returns nothing on a third-party site. design-os therefore keeps working with
+ * nothing installed and gains real names when pointed at a dev server.
+ */
+async function sourceLibrary() {
+  try {
+    // The package exports only its own entry, so the browser build cannot be
+    // imported by subpath. Resolve the entry and read the sibling file instead.
+    const entry = createRequire(import.meta.url).resolve('element-source');
+    return await readFile(join(dirname(entry), 'index.global.js'), 'utf8');
+  } catch {
+    // Not installed, or published without the global build. Neither is a fault.
+    return null;
+  }
+}
+
+/** Filesystem-safe kebab form of a component name. */
+const kebab = (text) =>
+  String(text)
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+
+/**
+ * Asks the page what the author called each slice.
+ *
+ * Runs after detection, because it keys off the markers detection leaves behind.
+ */
+async function sourceNames(session) {
+  const library = await sourceLibrary();
+  if (!library) return { available: false, names: {} };
+
+  const injected = await session.send('Runtime.evaluate', { expression: library }).catch(() => null);
+  if (!injected || injected.exceptionDetails) return { available: false, names: {} };
+
+  const resolved = await session
+    .send('Runtime.evaluate', { expression: SOURCE_NAMES, returnByValue: true, awaitPromise: true })
+    .catch(() => null);
+  return resolved && !resolved.exceptionDetails ? resolved.result.value : { available: false, names: {} };
+}
 
 const MARKER = 'data-design-os-slice';
 
@@ -81,10 +131,29 @@ export async function collectSlices(session) {
   if (matched.exceptionDetails) throw new Error(`slice matching failed: ${matched.exceptionDetails.text}`);
 
   const { slices: perSlice = {}, shell: shellRules = [], rulesConsidered = 0 } = matched.result.value ?? {};
+
+  // A name the author wrote beats a name inferred from markup, so it replaces
+  // the detector's choice where it exists. Everything else is left alone: on a
+  // production site this resolves nothing and the inferred chain still applies.
+  const source = await sourceNames(session);
+
   return {
     shell: { ...shell, ...stylesheet(shellRules) },
     rulesConsidered,
-    slices: detected.map((slice) => ({ ...slice, ...stylesheet(perSlice[slice.marker]) })),
+    source: { available: Boolean(source.available), named: source.named ?? 0, of: source.total ?? detected.length },
+    slices: detected.map((slice) => {
+      const authored = source.names?.[slice.marker];
+      const named = authored?.componentName ? { base: kebab(authored.componentName), namedBy: 'source' } : {};
+      return {
+        ...slice,
+        ...stylesheet(perSlice[slice.marker]),
+        ...named,
+        sourceFile: authored?.filePath
+          ? `${authored.filePath}${authored.lineNumber ? `:${authored.lineNumber}` : ''}`
+          : null,
+        componentStack: authored?.stack ?? null,
+      };
+    }),
   };
 }
 
@@ -212,6 +281,9 @@ export async function writeSlices(root, { shell, slices }, { ledger, replacement
       nodes: slice.descendants + 1,
       rules,
       variables,
+      // Where the author defined it, when the build still says.
+      sourceFile: slice.sourceFile ?? null,
+      componentStack: slice.componentStack ?? null,
       bytes: { markup: markup.length, styles: styles.length },
       routes: [routeMarker],
     };

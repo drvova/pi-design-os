@@ -282,6 +282,7 @@ recorded in `meta.json` — `namedBy: "tag"` means nothing better was available.
 
 | Source | Example |
 | --- | --- |
+| `source` | the author's own component name, from `element-source` |
 | `id` | `form#subscribe` becomes `features/subscribe-form` |
 | `aria-label` | a labelled control becomes `shared/ui/play-video-button` |
 | `class` | `PostCard_root__c3d4` becomes `entities/post-card` |
@@ -301,6 +302,28 @@ between renders.
 A primitive is named for what it is for and never for how it is styled, so a
 button is its label or just `button`. A repeated subtree needs three descendants
 to count as an entity, or a page of paragraphs becomes a page of components.
+
+### Names the author wrote
+
+[`element-source`](https://www.element-source.com) reads a component's own name
+and source file out of framework internals, for React, Preact, Vue, Svelte and
+Solid. Where it answers, it wins: a folder called `card` with
+`sourceFile: "/src/Card.jsx:3"` in its `meta.json` beats anything inferred from
+markup, and `componentStack` records the components it sits inside.
+
+It is an **optional** dependency, and absent is the normal case. It reads
+metadata that a production build strips, so on a third-party site it returns
+nothing: measured across `emilkowal.ski`, `vuejs.org`, `svelte.dev` and
+`linear.app` — 3042 live React fibers between them — it resolved zero names and
+zero paths, because those fibers carry neither `_debugSource` nor `_debugOwner`.
+A dev server is the opposite. Pointed at a Vite React app it resolves `Card` at
+`/src/Card.jsx:3`, which is the case that matters for cloning your own work.
+
+Injecting it changes nothing about the capture: the same page cloned with the
+library present and parked produced identical fidelity, slice count and element
+count. With nothing installed the inferred chain applies unchanged, so design-os
+still runs with no dependencies at all — installing this one pulls `bippy` with
+it, which is the whole reason it is optional rather than required.
 
 ### Verification
 
@@ -401,7 +424,8 @@ extensions/        the Pi extension, loaded in-process
 skills/            when the agent should reach for each tool
 ```
 
-Zero runtime dependencies. Node 22 ships a global `WebSocket`, so driving Chrome needs no
+No required dependencies; `element-source` is optional and only for naming slices after
+their real source files. Node 22 ships a global `WebSocket`, so driving Chrome needs no
 Puppeteer and no Playwright; `npm test` runs 37 checks on stdlib `node:test`, including a
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
 exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back

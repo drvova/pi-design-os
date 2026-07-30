@@ -46,5 +46,8 @@
     "description": "Read a website's rendering pipeline and design, or clone it into a runnable local copy.",
     "command": "design-os-mcp",
     "args": []
+  },
+  "optionalDependencies": {
+    "element-source": "^0.0.5"
   }
 }

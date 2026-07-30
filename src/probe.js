@@ -1226,3 +1226,48 @@ export const MATCH_SLICES = `
   return { slices: perSlice, shell: shell, rulesConsidered: flat.length };
 })();
 `;
+
+/**
+ * The author's own name for each marked slice, where the build still carries it.
+ *
+ * A production bundle strips React's `_debugSource` and `_debugOwner`, so this
+ * returns nothing on a third-party site: measured across four production pages
+ * with 3042 live fibers between them, zero names and zero paths came back. A dev
+ * server is the opposite — a Vite React app resolves `Card` at
+ * `/src/Card.jsx:3`, which is a better name for a folder than anything that can
+ * be inferred from markup.
+ *
+ * Evaluated with `awaitPromise`, after the library has been injected. Absence is
+ * the normal case and is reported as such rather than treated as a failure.
+ */
+export const SOURCE_NAMES = `
+(async function () {
+  if (typeof ElementSource === 'undefined' || typeof ElementSource.resolveElementInfo !== 'function') {
+    return { available: false, named: 0, names: {} };
+  }
+
+  var roots = document.querySelectorAll('[data-design-os-slice]');
+  var names = {};
+  var named = 0;
+  var failed = 0;
+
+  for (var i = 0; i < roots.length; i += 1) {
+    var root = roots[i];
+    try {
+      var info = await ElementSource.resolveElementInfo(root);
+      if (!info || !info.componentName) continue;
+      names[root.getAttribute('data-design-os-slice')] = {
+        componentName: info.componentName,
+        filePath: info.source ? info.source.filePath : null,
+        lineNumber: info.source ? info.source.lineNumber : null,
+        stack: (info.stack || []).map(function (frame) { return frame.componentName; }).filter(Boolean).slice(0, 6),
+      };
+      named += 1;
+    } catch (error) {
+      failed += 1;
+    }
+  }
+
+  return { available: true, named: named, failed: failed, total: roots.length, names: names };
+})();
+`;
