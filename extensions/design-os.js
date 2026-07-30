@@ -26,6 +26,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { chromePath, closeAllSessions } from '../src/cdp.js';
+import { stopClones } from '../src/clone.js';
 import { TOOLS, runTool } from '../src/tools.js';
 
 /** Where Pi keeps MCP server definitions: user first, then project-local. */
@@ -288,11 +289,15 @@ export default function designOs(pi, { mcpConfigs } = {}) {
     },
   });
 
-  // This package starts real browsers. A session that ends during a crawl would
-  // leave one running and a profile directory on disk, so anything still open
-  // when the host stops is closed here.
+  // This package starts real browsers and holds ports open. A session ending
+  // during a crawl would leave a browser running and a profile on disk, and a
+  // served clone would keep its port after the thing that asked for it is gone.
+  // Both are registered rather than spawned and forgotten, so both close here.
   pi.on('session_shutdown', async () => {
-    const closed = await closeAllSessions();
-    if (closed > 0) process.stderr.write(`design-os: closed ${closed} browser session(s) on shutdown\n`);
+    const browsers = await closeAllSessions();
+    const servers = await stopClones();
+    if (browsers > 0 || servers > 0) {
+      process.stderr.write(`design-os: closed ${browsers} browser session(s) and ${servers} server(s) on shutdown\n`);
+    }
   });
 }

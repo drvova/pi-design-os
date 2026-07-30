@@ -97,7 +97,16 @@ async function main(argv) {
 
   // parseArgs keeps the dashed spelling; commands take one camelCase shape.
   const { 'skip-verify': skipVerify, ...values } = parsed.values;
-  return emit(await handler({ ...values, skipVerify, url: target }));
+  const envelope = await handler({ ...values, skipVerify, url: target });
+  const code = emit(envelope);
+
+  // A served clone lives for as long as its process. The tool surfaces run
+  // inside a host that persists; this one exits, so it waits instead.
+  if (command === 'serve' && envelope.ok && envelope.data.url) {
+    progress('Serving until interrupted. Ctrl-C to stop.');
+    await new Promise(() => {});
+  }
+  return code;
 }
 
 try {

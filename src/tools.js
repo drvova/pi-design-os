@@ -105,6 +105,48 @@ export const TOOLS = [
     },
   },
   {
+    name: 'design_serve',
+    title: 'Serve a clone and return its url',
+    description:
+      'Serves a clone over http and returns the url to open. A clone is a static tree and a browser refuses ' +
+      'webfonts over file://, so looking at one properly means serving it. Accepts a directory, or the site the ' +
+      'clone was taken from — "stripe.com" finds the directory design_clone wrote for it. Calling this twice for ' +
+      'the same clone returns the same url rather than starting a second server. Pass stop to close it; pass stop ' +
+      'with no dir to close every one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dir: {
+          type: 'string',
+          description: 'Clone directory, or the site it was taken from. Omit only with stop, to close everything.',
+        },
+        stop: { type: 'boolean', description: 'Close the server instead of starting one.', default: false },
+        open: { type: 'boolean', description: 'Also open the url in the default browser.', default: false },
+      },
+    },
+  },
+  {
+    name: 'design_slices',
+    title: 'Read the components a clone extracted',
+    description:
+      'Lists the slices a clone extracted, or returns one component in full: its markup, and the stylesheet ' +
+      'containing only the rules that matched it. Needs a clone taken with layout "fsd". Without a name it ' +
+      'returns every slice with its layer, how it was named, how many instances the page had, and the source ' +
+      'file where the framework still reports one. With a name it returns that component so it can be read or ' +
+      'rebuilt without reaching for a shell.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dir: { type: 'string', description: 'Clone directory, or the site it was taken from.' },
+        name: {
+          type: 'string',
+          description: 'Slice to return, as its folder ("entities/post-card") or bare name ("post-card"). Omit to list.',
+        },
+      },
+      required: ['dir'],
+    },
+  },
+  {
     name: 'design_directions',
     title: 'Generate design directions',
     description:
@@ -123,7 +165,13 @@ export const TOOLS = [
 ];
 
 /** Tool name to command name. */
-export const HANDLERS = { design_inspect: 'inspect', design_clone: 'clone', design_directions: 'directions' };
+export const HANDLERS = {
+  design_inspect: 'inspect',
+  design_clone: 'clone',
+  design_serve: 'serve',
+  design_slices: 'slices',
+  design_directions: 'directions',
+};
 
 /**
  * Runs one tool and returns its envelope.

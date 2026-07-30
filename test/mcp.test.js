@@ -71,7 +71,7 @@ test('notifications are never answered', async () => {
 test('every tool declares a schema the model can fill in', async () => {
   const [reply] = await converse([{ jsonrpc: '2.0', id: 1, method: 'tools/list' }]);
   const names = reply.result.tools.map((tool) => tool.name);
-  assert.deepEqual(names, ['design_inspect', 'design_clone', 'design_directions']);
+  assert.deepEqual(names, ['design_inspect', 'design_clone', 'design_serve', 'design_slices', 'design_directions']);
 
   for (const tool of reply.result.tools) {
     assert.equal(tool.inputSchema.type, 'object');

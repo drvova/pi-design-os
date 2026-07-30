@@ -488,6 +488,48 @@ export async function captureClone(session, {
  * requests that a real origin allows, so verification over http is the only way
  * to see the clone the way a browser would.
  */
+/**
+ * Clones currently held open, keyed by directory.
+ *
+ * A server started and forgotten outlives whatever asked for it. Twice in
+ * development a throwaway static server was left holding a port after the thing
+ * that spawned it reported itself stopped, which is the same failure `src/cdp.js`
+ * keeps a session registry to avoid. A caller can close one, or a host can close
+ * them all on shutdown, because they are all reachable from here.
+ */
+const served = new Map();
+
+/** Serves a clone, reusing the server if that directory is already open. */
+export async function serveClone(root) {
+  const dir = resolve(root);
+  const open = served.get(dir);
+  if (open) return { dir, url: open.url, reused: true };
+
+  const server = await serveDirectory(dir);
+  served.set(dir, server);
+  return { dir, url: server.url, reused: false };
+}
+
+/** Closes one clone's server, or every one. Returns how many were open. */
+export async function stopClones(root) {
+  const targets = root ? [resolve(root)] : [...served.keys()];
+  let closed = 0;
+
+  for (const dir of targets) {
+    const open = served.get(dir);
+    if (!open) continue;
+    await open.close();
+    served.delete(dir);
+    closed += 1;
+  }
+  return closed;
+}
+
+/** What is being served right now. */
+export function servedClones() {
+  return [...served].map(([dir, server]) => ({ dir, url: server.url }));
+}
+
 export function serveDirectory(root) {
   const base = resolve(root);
 

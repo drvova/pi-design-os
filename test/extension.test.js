@@ -128,7 +128,7 @@ test('the doctor reports what a browser run needs', () => {
   assert.match(report, /node\s+v\d+/);
   assert.match(report, /websocket\s+built in/);
   assert.match(report, /chrome\s+\S+/);
-  assert.match(report, /design_inspect, design_clone, design_directions/);
+  assert.match(report, /design_inspect, design_clone, design_serve, design_slices, design_directions/);
 });
 
 test('a result renders as a summary, never as raw json', async () => {
@@ -208,7 +208,7 @@ test('the same tools are never offered twice', async (t) => {
     // Disabled entry means it is not actually being served.
     await write({ 'design-os': { command: 'design-os-mcp', disabled: true } });
     assert.equal(servedOverMcp([config]), null);
-    assert.equal(load([config]).tools.size, 3);
+    assert.equal(load([config]).tools.size, 5);
 
     // Somebody else's server is not ours.
     await write({ 'chrome-devtools': { command: 'npx', args: ['-y', 'chrome-devtools-mcp@latest'] } });
@@ -217,7 +217,7 @@ test('the same tools are never offered twice', async (t) => {
     // A broken config elsewhere on the machine must not stop design-os loading.
     await writeFile(config, '{ not json');
     assert.equal(servedOverMcp([config]), null);
-    assert.equal(load([config]).tools.size, 3);
+    assert.equal(load([config]).tools.size, 5);
 
     // A path that does not exist is simply not a config.
     assert.equal(servedOverMcp([join(dir, 'absent.json')]), null);
@@ -231,4 +231,89 @@ test('the package declares the same server an mcp client would launch', async ()
   assert.equal(manifest.mcp.command, 'design-os-mcp');
   assert.equal(manifest.bin[manifest.mcp.command], 'bin/design-os-mcp.js');
   assert.ok(manifest.files.includes('bin'));
+});
+
+test('a served clone is registered, reused, and closable', async (t) => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { servedClones, stopClones } = await import('../src/clone.js');
+  const { runTool } = await import('../src/tools.js');
+
+  const dir = await mkdtemp(join(tmpdir(), 'design-os-serve-'));
+  await writeFile(join(dir, 'index.html'), '<!doctype html><html><body>served</body></html>');
+
+  try {
+    const first = await runTool('design_serve', { dir });
+    assert.equal(first.ok, true);
+    assert.match(first.data.url, /^http:\/\/127\.0\.0\.1:\d+\/$/);
+    assert.equal(first.data.reused, false);
+
+    // Asking again must not start a second server on a second port.
+    const again = await runTool('design_serve', { dir });
+    assert.equal(again.data.url, first.data.url);
+    assert.equal(again.data.reused, true);
+    assert.equal(servedClones().length, 1, 'one directory, one server');
+
+    // It is actually serving, not merely recorded as doing so.
+    const response = await fetch(first.data.url);
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /served/);
+
+    // Registered means closable — the whole reason it is not spawned and forgotten.
+    const stopped = await runTool('design_serve', { dir, stop: true });
+    assert.equal(stopped.data.stopped, 1);
+    assert.deepEqual(servedClones(), []);
+    await assert.rejects(() => fetch(first.data.url), 'the port must be released');
+  } finally {
+    await stopClones();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('slices are readable from a tool call, not only from a shell', async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { runTool } = await import('../src/tools.js');
+
+  const dir = await mkdtemp(join(tmpdir(), 'design-os-slices-'));
+  const slice = { dir: 'entities/post-card', layer: 'entities', name: 'post-card', namedBy: 'class', tag: 'article', instances: 3, rules: 4, sourceFile: '/src/Card.jsx:3', routes: ['pages/home/ui/index.html'] };
+  await writeFile(
+    join(dir, 'manifest.json'),
+    JSON.stringify({ source: 'https://x.com/', layout: 'fsd', routes: [{ path: 'pages/home/ui/index.html' }], slices: [slice] }),
+  );
+  await mkdir(join(dir, 'entities', 'post-card', 'ui'), { recursive: true });
+  await writeFile(join(dir, 'entities/post-card/ui/ui.html'), '<article class="card">x</article>');
+  await writeFile(join(dir, 'entities/post-card/ui/styles.css'), '.card { border-radius: 12px }');
+
+  try {
+    const listed = await runTool('design_slices', { dir });
+    assert.equal(listed.ok, true);
+    assert.deepEqual(listed.data.layers, { entities: 1 });
+    assert.equal(listed.data.slices[0].sourceFile, '/src/Card.jsx:3');
+
+    // A bare name resolves as well as the full folder.
+    for (const name of ['post-card', 'entities/post-card']) {
+      const one = await runTool('design_slices', { dir, name });
+      assert.match(one.data.markup, /class="card"/);
+      assert.match(one.data.styles, /border-radius: 12px/);
+      assert.equal(one.data.slice.instances, 3);
+    }
+
+    const missing = await runTool('design_slices', { dir, name: 'nope' });
+    assert.equal(missing.ok, false);
+    assert.match(missing.error.message, /Call without a name to list them/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a clone is found by the site it came from, and says so when it is not', async () => {
+  const { runTool } = await import('../src/tools.js');
+  const absent = await runTool('design_slices', { dir: 'never-cloned-anything.example' });
+  assert.equal(absent.ok, false);
+  assert.equal(absent.error.code, 'USAGE_ERROR');
+  // The error has to name what is available, or the caller is left guessing.
+  assert.match(absent.error.message, /Cloned so far|Nothing cloned yet/);
 });
