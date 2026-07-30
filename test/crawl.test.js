@@ -63,6 +63,40 @@ test('a url reference is matched as a whole token, not as a substring', () => {
   assert.equal(rewrite('<img srcset="/docs 2x">'), '<img srcset="./docs/index.html 2x">');
 });
 
+test('a reference is matched at both of its ends', () => {
+  const replacements = [{ url: 'https://x.com/_app/a.css', path: 'shared/vendor/x.com/_app/a.css' }];
+  const local = 'shared/vendor/x.com/_app/a.css';
+
+  // Every spelling of the same file resolves to the same place. A page at the
+  // root writes `./_app/a.css`; guarding only the end of a match rewrote it one
+  // character in and produced a path beginning `.../`, which resolves nowhere.
+  for (const [markup, why] of [
+    ['<link href="./_app/a.css">', 'document-relative'],
+    ['<link href="_app/a.css">', 'bare relative'],
+    ['<link href="/_app/a.css">', 'root-relative'],
+    ['<link href="https://x.com/_app/a.css">', 'absolute'],
+    ['<link href="//x.com/_app/a.css">', 'protocol-relative'],
+  ]) {
+    const out = localise(markup, 'pages/home/ui/index.html', 'https://x.com/', replacements);
+    assert.equal(out, `<link href="../../../${local}">`, why);
+    assert.doesNotMatch(out, /\.\.\.\//, `${why} produced a path with three leading dots`);
+  }
+
+  // A nested page resolves relative references from its own directory, and for
+  // anything above it that means a `../` form.
+  const nested = localise(
+    '<link href="../_app/a.css">',
+    'pages/docs-intro/ui/index.html',
+    'https://x.com/docs/intro',
+    replacements,
+  );
+  assert.equal(nested, `<link href="../../../${local}">`);
+
+  // A longer path that merely starts with a known one is still left alone.
+  const longer = localise('<link href="/_app/a.css.map">', 'pages/home/ui/index.html', 'https://x.com/', replacements);
+  assert.equal(longer, '<link href="/_app/a.css.map">');
+});
+
 test('rewriting is a single pass, so a substitution is never re-substituted', () => {
   // The local path deliberately contains the url being replaced.
   const replacements = [{ url: 'https://x.com/site', path: 'site/index.html' }];

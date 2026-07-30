@@ -416,7 +416,7 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
       ? await writeSlices(clone.dir, detected, {
           ledger: clone.slices.ledger,
           replacements: cloned.replacements,
-          origin: cloned.pageOrigin,
+          origin: harvest.document.url,
           routeMarker: clone.slices.routeMarker,
         })
       : null;

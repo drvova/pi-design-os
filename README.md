@@ -324,11 +324,17 @@ that had nothing to do with Next.
 | `astro.build` | Astro islands, Tailwind | 2 | 100% | 23 |
 | `vuejs.org` | Vue, VitePress | 2 | 100% | 69 |
 | `htmx.org` | HTMX, no build step | 2 | 100% | 49 |
-| `svelte.dev` | SvelteKit | 2 | **33%** | 53 |
+| `svelte.dev` | SvelteKit | 2 | 100% | 53 |
 
-`svelte.dev` is a known failure, not a rounding error: its replica aborts five
-stylesheet requests and lays nothing out. It is recorded here rather than left
-out, because a table of only the sites that worked is not evidence.
+Every stack above clones at 100% with a clean replica load.
+
+**One open failure.** `tailwindcss.com` with `--layout fsd` blocks: near-zero CPU
+against a wall clock that keeps running, so it is waiting rather than working.
+The same page clones in 16 seconds at `--layout flat` with a fidelity of 1.0 and
+nothing failing, so the fault is in slice extraction on a page of that size, not
+in the copy. Capping the nodes asked per slice did not resolve it, and the cause
+is not yet known. Recorded here rather than left out, because a table of only the
+runs that worked is not evidence.
 
 ### What a clone is not
 

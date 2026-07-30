@@ -141,10 +141,10 @@ export async function cloneSite({
   const links = { rewritten: 0, external: 0, unresolved: 0 };
   const homePath = captured.get(entry)?.holder;
 
-  for (const [, { holder }] of captured) {
+  for (const [routeUrl, { holder }] of captured) {
     const path = `${dir}/${holder}`;
     const before = await readFile(path, 'utf8');
-    let after = localise(before, holder, origin, replacements);
+    let after = localise(before, holder, routeUrl, replacements);
     if (homePath) after = relinkHome(after, holder, homePath);
     if (after !== before) await writeFile(path, after, 'utf8');
 

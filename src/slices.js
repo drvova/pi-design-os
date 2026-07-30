@@ -28,6 +28,17 @@ const AUTHORED = new Set(['regular', 'author', 'inspector', 'injected']);
 const MARKER = 'data-design-os-slice';
 
 /**
+ * Nodes asked about per slice.
+ *
+ * Matched styles cost one round trip per node, so a page-sized slice on a large
+ * site turns into thousands of them and the run stops looking like it is doing
+ * anything. The rules a component uses saturate long before this: the sample is
+ * taken across the subtree rather than off the front, so a deep tail is
+ * represented, and any slice that hits the cap says so in its `meta.json`.
+ */
+const MAX_NODES_PER_SLICE = 400;
+
+/**
  * Selectors that address the document rather than a component.
  *
  * A universal selector matches every node, so the CSS domain returns Tailwind's
@@ -97,9 +108,19 @@ async function matchedCss(session, documentId, marker, { keepDocumentScoped = fa
   if (roots.nodeIds.length === 0) return { css: '', rules: 0, variables: [] };
 
   // The shell is two nodes; a slice is a root and everything beneath it.
-  const targets = keepDocumentScoped
-    ? roots.nodeIds
-    : [roots.nodeIds[0], ...(await session.send('DOM.querySelectorAll', { nodeId: roots.nodeIds[0], selector: '*' })).nodeIds];
+  let truncated = false;
+  let targets = roots.nodeIds;
+
+  if (!keepDocumentScoped) {
+    const inside = (await session.send('DOM.querySelectorAll', { nodeId: roots.nodeIds[0], selector: '*' })).nodeIds;
+    let sampled = inside;
+    if (inside.length > MAX_NODES_PER_SLICE) {
+      truncated = true;
+      const stride = inside.length / MAX_NODES_PER_SLICE;
+      sampled = Array.from({ length: MAX_NODES_PER_SLICE }, (_, index) => inside[Math.floor(index * stride)]);
+    }
+    targets = [roots.nodeIds[0], ...sampled];
+  }
 
   const seen = new Set();
   const blocks = [];
@@ -135,6 +156,8 @@ async function matchedCss(session, documentId, marker, { keepDocumentScoped = fa
   return {
     css,
     rules: blocks.length,
+    nodesAsked: targets.length,
+    truncated,
     variables: [...new Set([...css.matchAll(/var\(\s*(--[\w-]+)/g)].map((match) => match[1]))].sort(),
   };
 }
@@ -215,6 +238,9 @@ ${slice.markup}
 /**
  * Writes every slice found on one route, skipping any already written.
  *
+ * `origin` is the page's url, not just its origin: a reference inside a fragment
+ * resolves from the document that held it.
+ *
  * The same header appears on every route of a site. A slice is identified by
  * its layer, name and structural signature, so it is written once and later
  * routes only record that they use it.
@@ -244,7 +270,7 @@ export async function writeSlices(root, { shell, slices }, { ledger, replacement
     }
     taken.add(dir);
     const depth = dir.split('/').length + 1;
-    const { css, rules, variables } = slice;
+    const { css, rules, variables, nodesAsked, truncated } = slice;
 
     const markup = localise(slice.html, `${dir}/ui/ui.html`, origin, replacements);
     const styles = localise(css, `${dir}/ui/styles.css`, origin, replacements);
@@ -258,6 +284,8 @@ export async function writeSlices(root, { shell, slices }, { ledger, replacement
       instances: slice.instances,
       nodes: slice.descendants + 1,
       rules,
+      nodesAsked,
+      truncated,
       variables,
       bytes: { markup: markup.length, styles: styles.length },
       routes: [routeMarker],

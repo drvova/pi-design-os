@@ -192,10 +192,25 @@ export function routePath(rawUrl, layout = 'flat') {
  * it, not the page's. A stylesheet on a CDN referring to `/fonts/x.woff2` means
  * the CDN's root, so the holder decides whether that spelling is even valid.
  */
-function spellings(rawUrl, holderOrigin) {
+function spellings(rawUrl, holderUrl) {
   const url = new URL(rawUrl);
+  const holder = new URL(holderUrl);
   const found = [rawUrl, rawUrl.replace(/&/g, '&amp;'), `//${url.host}${url.pathname}${url.search}`];
-  if (url.origin === holderOrigin && url.pathname.length > 1) found.push(url.pathname + url.search);
+  if (url.origin !== holder.origin) return found;
+
+  if (url.pathname.length > 1) found.push(url.pathname + url.search);
+
+  // Document-relative, resolved from the file that holds the reference, the way
+  // a browser resolves it. svelte.dev writes `./_app/x.css`, and a rewriter that
+  // knows only the root-relative form matches one character in and leaves a path
+  // beginning `.../`.
+  const from = posix.dirname(holder.pathname);
+  const relative = posix.relative(from, url.pathname);
+  if (relative) {
+    // A `../` form is the correct relative reference for any page below the
+    // root, so it belongs here as much as the `./` one does.
+    found.push(relative.startsWith('..') ? relative : `./${relative}`, relative);
+  }
   return found;
 }
 
@@ -210,6 +225,18 @@ const escape = (literal) => literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * rewrite; a path separator may not, because it names a different one.
  */
 const REFERENCE_END = '(?=[\'"\\s)>,;#?]|$)';
+
+/**
+ * And a reference has to start at one too.
+ *
+ * The end was guarded and the start was not, which is the same mistake twice.
+ * A document-relative `./_app/x.css` contains the root-relative `/_app/x.css`
+ * one character in, so the rewrite landed after the dot and produced
+ * `.../../../shared/x.css` — a path with three leading dots that resolves
+ * nowhere. Anything that could continue a path to the left means the match is
+ * in the middle of a longer reference, not at the beginning of one.
+ */
+const REFERENCE_START = '(?<![\\w.\\-/])';
 
 /**
  * Rewrites every known url in `text` to a path relative to the file holding it.
@@ -229,19 +256,19 @@ const REFERENCE_END = '(?=[\'"\\s)>,;#?]|$)';
  * matches inside the result just written. A single alternation, longest branch
  * first, visits each character once and never revisits a substitution.
  */
-export function localise(text, holder, holderOrigin, replacements) {
+export function localise(text, holder, holderUrl, replacements) {
   const targets = new Map();
 
   for (const { url, path } of replacements) {
     let target = posix.relative(posix.dirname(holder), path);
     if (!target.startsWith('.')) target = `./${target}`;
-    for (const form of spellings(url, holderOrigin)) if (!targets.has(form)) targets.set(form, target);
+    for (const form of spellings(url, holderUrl)) if (!targets.has(form)) targets.set(form, target);
   }
   if (targets.size === 0) return text;
 
   // Alternation is tried left to right, so longest first means longest wins.
   const ordered = [...targets.keys()].sort((a, b) => b.length - a.length);
-  const pattern = new RegExp(`(?:${ordered.map(escape).join('|')})${REFERENCE_END}`, 'g');
+  const pattern = new RegExp(`${REFERENCE_START}(?:${ordered.map(escape).join('|')})${REFERENCE_END}`, 'g');
   return text.replace(pattern, (matched) => targets.get(matched));
 }
 
@@ -355,7 +382,9 @@ export async function captureClone(session, {
     // Text is rewritten only once the map is complete: a sheet can reference a
     // font that has not been walked yet.
     if (TEXTUAL.has(asset.type)) {
-      textual.push({ path, type: asset.type, origin: new URL(asset.url).origin, text: content.toString('utf8') });
+      // The sheet's own url, not just its origin: a reference inside it resolves
+      // from the directory the sheet was served from.
+      textual.push({ path, type: asset.type, from: asset.url, text: content.toString('utf8') });
     } else {
       written.push({ path, content, type: asset.type });
     }
@@ -365,11 +394,11 @@ export async function captureClone(session, {
     written.push({
       path: file.path,
       type: file.type,
-      content: Buffer.from(localise(file.text, file.path, file.origin, replacements), 'utf8'),
+      content: Buffer.from(localise(file.text, file.path, file.from, replacements), 'utf8'),
     });
   }
 
-  let document = localise(html, holder, pageOrigin, replacements);
+  let document = localise(html, holder, pageUrl, replacements);
   // A <base> would send every relative path back to the original origin.
   document = document.replace(/<base\b[^>]*>/gi, '');
   // Hints only describe loading. In a snapshot they 404 and pollute a
