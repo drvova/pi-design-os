@@ -19,6 +19,7 @@ import { createServer } from 'node:http';
 import { dirname, extname, join, posix, resolve, sep } from 'node:path';
 import { stat } from 'node:fs/promises';
 
+import { HINT_RELS } from './inspect-hints.js';
 import { fromRgb } from './oklch.js';
 import { SNAPSHOT } from './probe.js';
 
@@ -373,11 +374,21 @@ export async function captureClone(session, {
   document = document.replace(/<base\b[^>]*>/gi, '');
   // Hints only describe loading. In a snapshot they 404 and pollute a
   // re-inspection; in a mirror they point at files that are now really there.
+  //
+  // `rel` is a token list, and a link can be a hint and a stylesheet at once:
+  // Vite emits `rel="preload stylesheet"`. Matching the word `preload` anywhere
+  // in the attribute deleted those outright, which took every stylesheet with
+  // them -- vuejs.org cloned with 757 elements and not one rule applied to any
+  // of them. A link is only a hint when nothing in its rel does anything else.
   if (!mirror) {
-    document = document.replace(
-      /<link\b[^>]*\brel\s*=\s*["']?(?:preload|modulepreload|prefetch|prerender|preconnect|dns-prefetch)["']?[^>]*>/gi,
-      '',
-    );
+    document = document.replace(/<link\b[^>]*>/gi, (tag) => {
+      const rel = /\brel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+      if (!rel) return tag;
+
+      const tokens = (rel[1] ?? rel[2] ?? rel[3] ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+      const onlyHints = tokens.length > 0 && tokens.every((token) => HINT_RELS.has(token));
+      return onlyHints ? '' : tag;
+    });
   }
   // The origin's own policy can only break a copy of it: a CSP naming the
   // original's hosts blocks every local file, and an integrity hash on a

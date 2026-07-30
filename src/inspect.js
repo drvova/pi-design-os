@@ -22,6 +22,7 @@
  */
 
 import { captureClone } from './clone.js';
+import { HINT_RELS } from './inspect-hints.js';
 import { collectSlices, writeSlices } from './slices.js';
 import { openPage } from './cdp.js';
 import { CommandError } from './envelope.js';
@@ -44,7 +45,7 @@ const MAX_TOKENS = 400;
  */
 const DEGRADED_FAILURE_RATE = 0.1;
 
-const HINT_RELS = new Set(['preconnect', 'dns-prefetch', 'preload', 'modulepreload', 'prefetch', 'prerender']);
+
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

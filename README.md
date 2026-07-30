@@ -308,6 +308,12 @@ Every cloned route is scored, not just the entry. The manifest reports the mean
 and the lowest, because an average hides a single broken route and the worst one
 does not.
 
+Nothing in the cloning path branches on a framework: the transport is CDP, the
+phases come from `readyState`, assets come from the network log, and slices come
+from the DOM. The verification, though, was almost all Next.js, which is a gap in
+the evidence rather than in the code — and widening it immediately found a bug
+that had nothing to do with Next.
+
 | Site | Architecture | Routes | Fidelity | Unique assets |
 | --- | --- | --- | --- | --- |
 | `example.com` | static | 1 of 1 | 100% | 0 |
@@ -315,6 +321,14 @@ does not.
 | `tailwindcss.com` | Next.js, utility CSS | 5 of 311 | 100% | 109 |
 | `linear.app` | Next.js, styled-components | 3 of 81 | 100% | 411 |
 | `vercel.com` | Next.js, Tailwind, CSS Modules | 3 of 79 | 100% | 146 |
+| `astro.build` | Astro islands, Tailwind | 2 | 100% | 23 |
+| `vuejs.org` | Vue, VitePress | 2 | 100% | 69 |
+| `htmx.org` | HTMX, no build step | 2 | 100% | 49 |
+| `svelte.dev` | SvelteKit | 2 | **33%** | 53 |
+
+`svelte.dev` is a known failure, not a rounding error: its replica aborts five
+stylesheet requests and lays nothing out. It is recorded here rather than left
+out, because a table of only the sites that worked is not evidence.
 
 ### What a clone is not
 
