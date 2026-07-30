@@ -6,7 +6,8 @@
   "description": "Explore design directions from your coding agent, and read them off real sites. Local-first.",
   "license": "MIT",
   "bin": {
-    "design-os": "bin/design-os.js"
+    "design-os": "bin/design-os.js",
+    "design-os-mcp": "bin/design-os-mcp.js"
   },
   "scripts": {
     "test": "node --test",
@@ -21,7 +22,8 @@
     "bin",
     "src",
     "extensions",
-    "skills"
+    "skills",
+    "examples"
   ],
   "keywords": [
     "pi-package",
@@ -38,5 +40,11 @@
     "skills": [
       "./skills"
     ]
+  },
+  "mcp": {
+    "name": "design-os",
+    "description": "Read a website's rendering pipeline and design, or clone it into a runnable local copy.",
+    "command": "design-os-mcp",
+    "args": []
   }
 }

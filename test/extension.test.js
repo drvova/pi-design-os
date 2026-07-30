@@ -5,15 +5,20 @@ import designOs from '../extensions/design-os.js';
 import { TOOLS, runTool } from '../src/tools.js';
 
 /** Captures everything the extension registers, the way Pi would. */
-function load() {
+function load(mcpConfigs = []) {
   const tools = new Map();
   const commands = new Map();
   const hooks = new Map();
-  designOs({
-    registerTool: (tool) => tools.set(tool.name, tool),
-    registerCommand: (name, spec) => commands.set(name, spec),
-    on: (event, handler) => hooks.set(event, handler),
-  });
+  // An empty config list by default: what this machine happens to have
+  // installed must not decide whether the tests see any tools.
+  designOs(
+    {
+      registerTool: (tool) => tools.set(tool.name, tool),
+      registerCommand: (name, spec) => commands.set(name, spec),
+      on: (event, handler) => hooks.set(event, handler),
+    },
+    { mcpConfigs },
+  );
   return { tools, commands, hooks };
 }
 
@@ -176,4 +181,54 @@ test('browsers left open are closed when the session ends', async () => {
   assert.equal(typeof shutdown, 'function', 'a package that starts browsers must clean them up');
   // Nothing is open, so this must be a no-op rather than a failure.
   await assert.doesNotReject(() => shutdown());
+});
+
+test('the same tools are never offered twice', async (t) => {
+  const { writeFile, mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { servedOverMcp } = await import('../extensions/design-os.js');
+
+  const dir = await mkdtemp(join(tmpdir(), 'design-os-mcp-'));
+  const config = join(dir, 'mcp.json');
+  const write = (servers) => writeFile(config, JSON.stringify({ mcpServers: servers }, null, 2));
+
+  try {
+    // Reached over MCP: the extension yields, because it cannot unregister what
+    // MCP supplied, and the model would otherwise see every tool twice.
+    await write({ 'design-os': { command: 'node', args: ['/x/bin/design-os-mcp.js'] } });
+    assert.deepEqual(servedOverMcp([config]), { path: config, name: 'design-os' });
+
+    const served = load([config]);
+    assert.equal(served.tools.size, 0, 'tools must not be registered twice');
+    // Neither of these can come from MCP, so both are registered regardless.
+    assert.equal(served.commands.size, 4, 'MCP cannot offer a slash command');
+    assert.ok(served.hooks.has('session_shutdown'), 'MCP cannot close a browser this package started');
+
+    // Disabled entry means it is not actually being served.
+    await write({ 'design-os': { command: 'design-os-mcp', disabled: true } });
+    assert.equal(servedOverMcp([config]), null);
+    assert.equal(load([config]).tools.size, 3);
+
+    // Somebody else's server is not ours.
+    await write({ 'chrome-devtools': { command: 'npx', args: ['-y', 'chrome-devtools-mcp@latest'] } });
+    assert.equal(servedOverMcp([config]), null);
+
+    // A broken config elsewhere on the machine must not stop design-os loading.
+    await writeFile(config, '{ not json');
+    assert.equal(servedOverMcp([config]), null);
+    assert.equal(load([config]).tools.size, 3);
+
+    // A path that does not exist is simply not a config.
+    assert.equal(servedOverMcp([join(dir, 'absent.json')]), null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('the package declares the same server an mcp client would launch', async () => {
+  const { default: manifest } = await import('../package.json', { with: { type: 'json' } });
+  assert.equal(manifest.mcp.command, 'design-os-mcp');
+  assert.equal(manifest.bin[manifest.mcp.command], 'bin/design-os-mcp.js');
+  assert.ok(manifest.files.includes('bin'));
 });

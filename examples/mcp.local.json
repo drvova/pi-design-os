@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "design-os": {
+      "command": "node",
+      "args": ["/absolute/path/to/design-os/bin/design-os-mcp.js"],
+      "disabled": false
+    }
+  }
+}

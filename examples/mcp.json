@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "design-os": {
+      "command": "design-os-mcp",
+      "args": []
+    }
+  }
+}

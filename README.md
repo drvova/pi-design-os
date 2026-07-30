@@ -311,9 +311,11 @@ Puppeteer and no Playwright; `npm test` runs 37 checks on stdlib `node:test`, in
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
 exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back
 through the served copy, and a Feature-Sliced run asserting that a slice carries the rules
-that matched it and none that did not. Total: 55 checks, including one that asserts the native and MCP surfaces are the same
-object rather than two copies of it, and one that asserts a degraded capture is drawn above
-the verdict it invalidates.
+that matched it and none that did not. Total: 57 checks, including one that asserts the native and MCP surfaces are the same
+object rather than two copies of it, one that asserts a degraded capture is drawn above the
+verdict it invalidates, and one that asserts the two front ends never offer the same tool
+twice. The extension takes its config paths as an argument, so what a machine happens to
+have installed cannot decide what the tests see.
 
 ## Pi
 
@@ -342,7 +344,8 @@ pi remove ./design-os         # reversible
 Four things make the package native rather than merely reachable.
 
 **Tools.** `design_inspect`, `design_clone` and `design_directions`, registered
-from the shared declaration.
+from the shared declaration — unless the same server is already configured in
+`mcp.json`, in which case they are left to it. See below.
 
 **Commands**, so the work can be run without spending a model turn:
 
@@ -375,8 +378,38 @@ fact.
 
 ## MCP
 
-For agents that are not Pi, `design-os mcp` speaks line-delimited JSON-RPC 2.0 on
-stdio, protocol `2025-06-18`.
+`design-os-mcp` is the server as an `mcp.json` client launches it — a dedicated
+binary, so the entry is a command with no arguments and cannot be broken by a
+change to the CLI's argument parsing. `design-os mcp` is the same server reached
+the other way. It speaks line-delimited JSON-RPC 2.0 on stdio, protocol
+`2025-06-18`.
+
+```json
+{
+  "mcpServers": {
+    "design-os": { "command": "design-os-mcp", "args": [] }
+  }
+}
+```
+
+`examples/mcp.json` holds that, and `examples/mcp.local.json` the absolute-path
+form for a checkout that is not installed. Pi reads `~/.pi/agent/mcp.json`; other
+clients read their own file with the same shape.
+
+### Only one of the two paths at a time
+
+The package can be reached natively and over MCP, and both at once is the single
+combination that is wrong: Pi would spawn the stdio server, register its tools,
+and the extension would then register a second set under the same names. The
+model would see every tool twice.
+
+The extension is the one that yields, because it cannot unregister what MCP
+supplied. On load it reads the MCP config, and if design-os is there and enabled
+it skips tool registration and says so, naming the file so the entry can be
+found. Commands and the shutdown hook are registered either way — MCP has no way
+to offer a slash command, and no way to close a browser this package started.
+
+`/design-doctor` reports which path is live.
 
 | Tool | Purpose |
 | --- | --- |

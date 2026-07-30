@@ -21,8 +21,48 @@
  * is working in rather than inside this package.
  */
 
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import { chromePath, closeAllSessions } from '../src/cdp.js';
 import { TOOLS, runTool } from '../src/tools.js';
+
+/** Where Pi keeps MCP server definitions: user first, then project-local. */
+const MCP_CONFIGS = () => [join(homedir(), '.pi', 'agent', 'mcp.json'), join(process.cwd(), '.pi', 'mcp.json')];
+
+/**
+ * Whether Pi is already serving these tools over MCP.
+ *
+ * The same package can be reached two ways, and both at once is the one
+ * combination that is wrong: Pi would spawn the stdio server, register its
+ * tools, and then this extension would register a second set with the same
+ * names and the model would see every tool twice. The extension cannot
+ * unregister what MCP supplied, so it is the one that yields.
+ *
+ * A malformed config is reported and stepped over rather than thrown, because
+ * an unreadable file elsewhere on the machine must not stop design-os loading.
+ */
+export function servedOverMcp(paths = MCP_CONFIGS()) {
+  for (const path of paths) {
+    if (!existsSync(path)) continue;
+
+    let servers;
+    try {
+      servers = JSON.parse(readFileSync(path, 'utf8')).mcpServers ?? {};
+    } catch (error) {
+      process.stderr.write(`design-os: could not read ${path}: ${error.message}\n`);
+      continue;
+    }
+
+    for (const [name, server] of Object.entries(servers)) {
+      if (server?.disabled) continue;
+      const declaration = `${name} ${server?.command ?? ''} ${(server?.args ?? []).join(' ')}`;
+      if (declaration.includes('design-os')) return { path, name };
+    }
+  }
+  return null;
+}
 
 const serialise = (envelope) => JSON.stringify(envelope, null, 2);
 
@@ -162,8 +202,25 @@ async function runFromCommand(name, args) {
   return [`${name} ok`, ...summarise(envelope.data)].join('\n');
 }
 
-export default function designOs(pi) {
-  for (const tool of TOOLS) {
+/**
+ * @param {object} pi Pi's extension API
+ * @param {{mcpConfigs?: string[]}} [options] config paths to consult; the
+ *   default reads the machine's, which is why tests pass their own rather than
+ *   letting the result depend on what happens to be installed.
+ */
+export default function designOs(pi, { mcpConfigs } = {}) {
+  // Commands and the shutdown hook are registered either way: MCP has no way to
+  // offer a slash command, and no way to close a browser this package started.
+  const overMcp = servedOverMcp(mcpConfigs ?? MCP_CONFIGS());
+  if (overMcp) {
+    process.stderr.write(
+      `design-os: tools already served over MCP as "${overMcp.name}" (${overMcp.path}); ` +
+        'skipping native registration so they are not offered twice. ' +
+        'Remove that entry to get the in-process path, with result summaries and no subprocess.\n',
+    );
+  }
+
+  for (const tool of overMcp ? [] : TOOLS) {
     pi.registerTool({
       name: tool.name,
       label: tool.title ?? tool.name,
@@ -226,6 +283,7 @@ export default function designOs(pi) {
         lines.push(`chrome     ${error.message}`);
       }
       lines.push(`tools      ${TOOLS.map((tool) => tool.name).join(', ')}`);
+      lines.push(`served     ${overMcp ? `over MCP as "${overMcp.name}" (${overMcp.path})` : 'natively, in this process'}`);
       return lines.join('\n');
     },
   });
