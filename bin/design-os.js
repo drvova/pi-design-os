@@ -41,6 +41,7 @@ inspect and clone options:
 
 clone options:
   --routes <n>      routes to crawl breadth-first from the url    (default 1)
+  --layout <l>      flat | fsd, Feature-Sliced Design tree         (default flat)
   --budget <mb>     asset size budget, lowest priority cut first  (default 40)
   --scripts         keep the page's scripts wired up instead of disabling them
   --skip-verify     do not load the clone back and score it
@@ -62,6 +63,7 @@ const OPTIONS = {
   timeout: { type: 'string' },
   budget: { type: 'string' },
   routes: { type: 'string' },
+  layout: { type: 'string' },
   screenshot: { type: 'boolean', default: false },
   gallery: { type: 'boolean', default: false },
   scripts: { type: 'boolean', default: false },

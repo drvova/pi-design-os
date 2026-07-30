@@ -22,6 +22,7 @@
  */
 
 import { captureClone } from './clone.js';
+import { collectSlices, writeSlices } from './slices.js';
 import { openPage } from './cdp.js';
 import { CommandError } from './envelope.js';
 import { toDirection } from './extract.js';
@@ -280,7 +281,8 @@ function collect(session) {
  * Loads a url once and reports the whole pipeline.
  *
  * @param {{url:string, wait?:number, timeout?:number, screenshot?:boolean,
- *   clone?:{dir:string, holder?:string, saved?:Map, scripts?:boolean, maxBytes?:number}}} options
+ *   clone?:{dir:string, holder?:string, saved?:Map, layout?:string, scripts?:boolean,
+ *     maxBytes?:number, slices?:{ledger:Map, routeMarker:string}}}} options
  */
 export async function inspectPage({ url, wait = 15000, timeout = 30000, screenshot = false, clone = null }) {
   const target = normaliseUrl(url);
@@ -376,6 +378,10 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
     // Last, and only last. Snapshotting writes the CSSOM back into the DOM and
     // mirrors field state onto attributes; running it any earlier would put its
     // own mutations into the measurements above.
+    // Detection marks the nodes and the CSS domain answers about them, so both
+    // must happen while the document is still live and before it is serialized.
+    const detected = clone?.slices ? await collectSlices(session) : null;
+
     const cloned = clone
       ? await captureClone(session, {
           assets,
@@ -383,8 +389,20 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
           outDir: clone.dir,
           holder: clone.holder,
           saved: clone.saved,
+          layout: clone.layout,
           keepScripts: clone.scripts,
           maxBytes: clone.maxBytes,
+        })
+      : null;
+
+    // Written only now: a slice's markup and css reference the same assets the
+    // page does, and those paths are not known until the assets are saved.
+    const sliced = detected
+      ? await writeSlices(clone.dir, detected, {
+          ledger: clone.slices.ledger,
+          replacements: cloned.replacements,
+          origin: cloned.pageOrigin,
+          routeMarker: clone.slices.routeMarker,
         })
       : null;
 
@@ -570,7 +588,16 @@ export async function inspectPage({ url, wait = 15000, timeout = 30000, screensh
 
       stack: harvest.stack,
       links: harvest.links,
-      clone: cloned && { ...cloned, attachShadowCalls: probe.apis.attachShadow?.total ?? 0 },
+      clone: cloned && {
+        ...cloned,
+        attachShadowCalls: probe.apis.attachShadow?.total ?? 0,
+        slices: sliced ? { found: detected.slices.length, written: sliced.length } : null,
+        // Carried for the crawl's final pass, not for the report.
+        replacements: undefined,
+      },
+      sheetTexts: clone?.slices ? sheetTexts : undefined,
+      shellCss: detected?.shell?.css,
+      cloneReplacements: cloned?.replacements,
       direction: toDirection(harvest.design, { url: harvest.document.url, title: harvest.document.title }),
       screenshot: shot,
     };

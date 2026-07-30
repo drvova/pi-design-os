@@ -152,6 +152,7 @@ export async function clone(options = {}) {
   const timeout = integer(options.timeout, { name: 'timeout', min: 5000, max: 180000, fallback: 30000 });
   const budget = integer(options.budget, { name: 'budget', min: 1, max: 2048, fallback: 40 });
   const routes = integer(options.routes, { name: 'routes', min: 1, max: 200, fallback: 1 });
+  const layout = choice(options.layout, { name: 'layout', allowed: ['flat', 'fsd'], fallback: 'flat' });
   const target = normaliseUrl(options.url);
   const dir = resolve(options.out ?? `${WORKSPACE}/clone-${slug(target)}`);
 
@@ -166,6 +167,7 @@ export async function clone(options = {}) {
     maxBytes: budget * 1024 * 1024,
     screenshot: Boolean(options.screenshot),
     verify: !options.skipVerify,
+    layout,
   });
 
   const { entryReport: report, ...manifest } = site;
@@ -173,6 +175,7 @@ export async function clone(options = {}) {
     `Cloned ${site.cloned} of ${site.discovered} discovered routes, ` +
       `${site.assets.unique} unique assets, ${Math.round(site.assets.bytes / 1024)}KB`,
   );
+  if (site.slices?.length) progress(`Extracted ${site.slices.length} slices across ${new Set(site.slices.map((s) => s.layer)).size} layers`);
   if (site.fidelity) progress(`Fidelity ${Math.round(site.fidelity.score * 100)}% (lowest ${Math.round(site.fidelity.lowest * 100)}%)`);
 
   const stem = `${WORKSPACE}/${slug(report.finalUrl)}`;

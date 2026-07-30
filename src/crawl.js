@@ -29,6 +29,7 @@ import {
 } from './clone.js';
 import { progress } from './envelope.js';
 import { inspectPage, normaliseUrl } from './inspect.js';
+import { writeAppStyles, writeEntry, writeManifest, writeReadme } from './slices.js';
 
 /** Linked, but never a page: following these wastes a browser launch. */
 const NOT_A_DOCUMENT =
@@ -90,11 +91,13 @@ export async function cloneSite({
   maxBytes = 40 * 1024 * 1024,
   screenshot = false,
   verify = true,
+  layout = 'flat',
 }) {
   const entry = normaliseUrl(url);
   const origin = new URL(entry).origin;
 
   const saved = new Map();
+  const sliceLedger = new Map();
   const captured = new Map();
   const queued = new Set([entry]);
   const order = [entry];
@@ -104,7 +107,7 @@ export async function cloneSite({
   // whichever branch happened to be walked first.
   while (order.length > 0 && captured.size < routes) {
     const next = order.shift();
-    const holder = routePath(next);
+    const holder = routePath(next, layout);
 
     progress(`[${captured.size + 1}/${routes}] ${next}`);
     const report = await inspectPage({
@@ -112,7 +115,15 @@ export async function cloneSite({
       wait,
       timeout,
       screenshot: screenshot && next === entry,
-      clone: { dir, holder, saved, scripts, maxBytes },
+      clone: {
+        dir,
+        holder,
+        saved,
+        layout,
+        scripts,
+        maxBytes,
+        slices: layout === 'fsd' ? { ledger: sliceLedger, routeMarker: holder } : undefined,
+      },
     });
     captured.set(next, { report, holder });
 
@@ -139,6 +150,22 @@ export async function cloneSite({
 
     const counted = countLinks(after, origin);
     for (const key of Object.keys(links)) links[key] += counted[key];
+  }
+
+  const entryReport = captured.get(entry).report;
+
+  // The layer files describe the whole clone, so they are written once the set
+  // of routes and the ledger of slices are both closed.
+  let layers = null;
+  if (layout === 'fsd') {
+    layers = await writeAppStyles(
+      dir,
+      entryReport.sheetTexts ?? [],
+      origin,
+      entryReport.cloneReplacements ?? [],
+      entryReport.shellCss ?? '',
+    );
+    await writeEntry(dir, captured.get(entry).holder);
   }
 
   const summaries = [...captured].map(([routeUrl, { report, holder }]) => ({
@@ -178,9 +205,28 @@ export async function cloneSite({
     .filter((summary) => summary.fidelity)
     .sort((a, b) => a.fidelity.score - b.fidelity.score)[0];
 
+  const manifest = {
+    source: entry,
+    dir,
+    capturedAt: new Date().toISOString(),
+    layout,
+    discovered,
+    routes: summaries.map((summary) => ({ path: summary.path, url: summary.url, title: summary.title })),
+    slices: [...sliceLedger.values()],
+    assets: { unique: saved.size },
+  };
+
+  if (layout === 'fsd') {
+    await writeManifest(dir, manifest);
+    await writeReadme(dir, manifest);
+  }
+
   return {
     dir,
-    entry: captured.get(entry).report.clone.entry,
+    layout,
+    entry: layout === 'fsd' ? `${dir}/index.html` : entryReport.clone.entry,
+    layers,
+    slices: manifest.slices,
     requested: routes,
     cloned: captured.size,
     discovered,
@@ -198,6 +244,6 @@ export async function cloneSite({
           lowestRoute: worst.path,
           weakest: worst.fidelity.weakest,
         },
-    entryReport: captured.get(entry).report,
+    entryReport,
   };
 }

@@ -15,7 +15,7 @@ attachment and variant worktrees are not built yet.
 ```bash
 node bin/design-os.js directions --count 24 --seed monozukuri --open
 node bin/design-os.js inspect stripe.com --screenshot --gallery --open
-node bin/design-os.js clone linear.app --routes 5
+node bin/design-os.js clone linear.app --routes 5 --layout fsd
 node bin/design-os.js mcp
 ```
 
@@ -29,6 +29,7 @@ node bin/design-os.js mcp
 | `--screenshot` | off | also write a PNG of the loaded page |
 | `--gallery` | off | render the extracted direction as HTML |
 | `--routes <n>` | `1` | routes to crawl breadth-first from the url |
+| `--layout <l>` | `flat` | `flat`, or `fsd` for a Feature-Sliced Design tree |
 | `--budget <mb>` | `40` | clone asset budget; the lowest priority is cut first |
 | `--scripts` | off | keep the cloned page's scripts wired up |
 | `--skip-verify` | off | do not load the clone back and score it |
@@ -165,6 +166,68 @@ route cap or refused as a non-document. Cloning 5 of the 311 routes
 `tailwindcss.com` offers leaves most links with nowhere local to go, and the
 number says so.
 
+### Feature-Sliced output
+
+`--layout fsd` writes the clone as a [Feature-Sliced Design](https://feature-sliced.design)
+tree instead of a mirror of the origin. `app` and `shared` hold segments directly,
+because neither has business domains; every other layer holds slices, each with a
+`ui` segment.
+
+```
+index.html            pointer into pages/, so the folder still opens
+app/styles/           tokens.css, fonts.css, global.css
+pages/<route>/ui/     one slice per cloned route
+widgets/<name>/ui/    landmarks: header, footer, nav, aside
+features/<name>/ui/   declared interaction: forms, dialogs, menus
+entities/<name>/ui/   subtrees the page repeats
+shared/ui/<name>/     leaf controls, one folder per distinct control
+shared/vendor/        the site's own stylesheets and scripts, verbatim
+shared/fonts/  shared/images/  shared/media/
+manifest.json  README.md
+```
+
+Each slice folder carries `ui/ui.html`, `ui/styles.css`, `ui/preview.html` and a
+`meta.json`.
+
+**The stylesheet beside a component is only that component's.** Every node in a
+slice is put to `CSS.getMatchedStylesForNode`, so the browser decides what
+applies rather than a selector search. Rules that address the document itself
+are held back, because a universal selector matches every node and Tailwind's
+preflight would otherwise be copied under all seventy-odd components with no
+single home.
+
+`preview.html` reproduces the captured `html` and `body` attributes. Those are
+not decoration: a theme class sits on `html` and font-loader classes sit on
+`body`, and a preview with a bare shell renders every component in the fallback
+serif with none of its tokens resolved.
+
+### Naming a slice
+
+A cloned page has no business domains, so a name is inferred and the source is
+recorded in `meta.json` — `namedBy: "tag"` means nothing better was available.
+
+| Source | Example |
+| --- | --- |
+| `id` | `form#subscribe` becomes `features/subscribe-form` |
+| `aria-label` | a labelled control becomes `shared/ui/play-video-button` |
+| `class` | `PostCard_root__c3d4` becomes `entities/post-card` |
+| `content` | a nested landmark takes its own heading |
+| `tag` | `header` becomes `widgets/site-header` |
+
+An id or a label names the instance, so the tag is appended to say what the thing
+is. A class only counts when it is the author's own name: a utility class
+describes appearance, not identity, and naming a component after one produces
+`widgets/mb-32` for a page header. Utilities are rejected by a prefix vocabulary,
+since a shape test separates `mb-32` from `post-card` but not `items-center` from
+it — both are two words, and only the first names a CSS property. An element
+carrying five or more classes is being styled by utilities and is not named from
+them at all. Framework-generated ids are rejected too, because they change
+between renders.
+
+A primitive is named for what it is for and never for how it is styled, so a
+button is its label or just `button`. A repeated subtree needs three descendants
+to count as an entity, or a page of paragraphs becomes a page of components.
+
 ### Verification
 
 A clone nobody loaded is a claim. Unless `--skip-verify` is passed, the copy is
@@ -232,6 +295,7 @@ src/probe.js       browser-side sources: pre-document probe, post-load harvest
 src/inspect.js     one page load -> the whole pipeline
 src/clone.js       localise, rewrite, serve, and score a copy
 src/crawl.js       breadth-first multi-route cloning
+src/slices.js      slice detection, matched css, Feature-Sliced output
 src/extract.js     rendered page -> design direction
 src/commands.js    command implementations, shared by CLI and MCP
 src/mcp.js         MCP stdio server
@@ -242,8 +306,9 @@ bin/design-os.js   CLI
 Zero runtime dependencies. Node 22 ships a global `WebSocket`, so driving Chrome needs no
 Puppeteer and no Playwright; `npm test` runs 37 checks on stdlib `node:test`, including a
 full pipeline read off a local fixture served over `node:http`, a clone of a page whose CSS
-exists only in the CSSOM, and a four-route crawl whose every rewritten link is fetched
-back through the served copy.
+exists only in the CSSOM, a four-route crawl whose every rewritten link is fetched back
+through the served copy, and a Feature-Sliced run asserting that a slice carries the rules
+that matched it and none that did not. Total: 42 checks.
 
 ## MCP
 
@@ -252,7 +317,7 @@ back through the served copy.
 | Tool | Purpose |
 | --- | --- |
 | `design_inspect` | Load a url once and report its rendering pipeline and its design. |
-| `design_clone` | Copy a url, or crawl a site, then load every route back and score it. |
+| `design_clone` | Copy a url, or crawl a site, then load every route back and score it. `layout: "fsd"` emits a Feature-Sliced tree with components extracted. |
 | `design_directions` | Generate deterministic directions and write a gallery. |
 
 Both call `src/commands.js`, the same entry point the CLI uses, so a tool call and a shell
@@ -324,7 +389,7 @@ Decision 4 is what makes a run instant and free where Rivet's is metered and tak
 ## Next
 
 - `open` — dev-server attach and proxy
-- component extraction from a cloned route
+- slice detection for frameworks that keep component names in the build
 - `variants start|status|commit` over `git worktree`
 
 ## Requirements

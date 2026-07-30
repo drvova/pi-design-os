@@ -99,7 +99,7 @@ const segment = (raw) => raw.replace(/[^\w.-]+/g, '-').replace(/^\.+/, '').slice
  * The query string is folded into the filename: `?v=1` and `?v=2` are different
  * resources and must not collide on one path.
  */
-function localPath(rawUrl, mimeType) {
+function localPath(rawUrl, mimeType, root = 'assets') {
   const url = new URL(rawUrl);
   const parts = url.pathname.split('/').filter((part) => part && part !== '.' && part !== '..').map(segment);
   if (parts.length === 0) parts.push('index');
@@ -111,23 +111,65 @@ function localPath(rawUrl, mimeType) {
   }
   if (!extname(file)) file += EXTENSION_FOR[String(mimeType).split(';')[0]] ?? '';
 
-  return posix.join('assets', segment(url.host), ...parts, file);
+  return posix.join(root, segment(url.host), ...parts, file);
+}
+
+/**
+ * Where each kind of asset lives, per layout.
+ *
+ * `flat` mirrors the origin under one folder. `fsd` files assets by what they
+ * are: a font is not a stylesheet, and Feature-Sliced Design puts both in
+ * `shared`, which holds segments directly because it has no business domains.
+ */
+const BUCKETS = {
+  Stylesheet: 'shared/vendor',
+  Script: 'shared/vendor',
+  Document: 'shared/frames',
+  Font: 'shared/fonts',
+  Image: 'shared/images',
+  Media: 'shared/media',
+  Manifest: 'shared/config',
+};
+
+export const LAYOUTS = {
+  flat: {
+    assetRoot: () => 'assets',
+    route: (url) => routeSegments(url).join('/') || 'index.html',
+  },
+  fsd: {
+    assetRoot: (asset) =>
+      BUCKETS[asset.type] ?? (/^image\//i.test(String(asset.mimeType)) ? 'shared/images' : 'shared/vendor'),
+    // Every route is a slice of the pages layer, and its markup is its ui segment.
+    route: (url) => posix.join('pages', routeSlug(url), 'ui', 'index.html'),
+  },
+};
+
+/** Directory form, so `/docs` and `/docs/install` cannot collide on one path. */
+function routeSegments(rawUrl) {
+  const url = new URL(rawUrl);
+  const parts = url.pathname.split('/').filter((part) => part && part !== '.' && part !== '..').map(segment);
+  if (parts.length === 0) return ['index.html'];
+  if (url.search) parts.push(short(url.search));
+  if (/\.x?html?$/i.test(parts.at(-1))) return parts;
+  return [...parts, 'index.html'];
+}
+
+/** One flat slice name for a route, since slices do not nest within a layer. */
+function routeSlug(rawUrl) {
+  const url = new URL(rawUrl);
+  const parts = url.pathname.split('/').filter((part) => part && part !== '.' && part !== '..').map(segment);
+  if (url.search) parts.push(short(url.search));
+  return parts.join('-').replace(/\.x?html?$/i, '') || 'home';
 }
 
 /**
  * Local html file for a route.
  *
- * Directory form, so `/docs` and `/docs/install` cannot collide on one path and
- * a link to either resolves the same way served or opened from disk.
+ * @param {string} rawUrl
+ * @param {'flat'|'fsd'} layout
  */
-export function routePath(rawUrl) {
-  const url = new URL(rawUrl);
-  const parts = url.pathname.split('/').filter((part) => part && part !== '.' && part !== '..').map(segment);
-  if (parts.length === 0) return 'index.html';
-  if (url.search) parts.push(short(url.search));
-  // A path that already names a document is used as written.
-  if (/\.x?html?$/i.test(parts.at(-1))) return posix.join(...parts);
-  return posix.join(...parts, 'index.html');
+export function routePath(rawUrl, layout = 'flat') {
+  return LAYOUTS[layout].route(rawUrl);
 }
 
 /**
@@ -204,6 +246,7 @@ export async function captureClone(session, {
   outDir,
   holder = 'index.html',
   saved = new Map(),
+  layout = 'flat',
   keepScripts = false,
   maxBytes = 40 * 1024 * 1024,
 }) {
@@ -262,7 +305,7 @@ export async function captureClone(session, {
       continue;
     }
 
-    const path = localPath(asset.url, asset.mimeType);
+    const path = localPath(asset.url, asset.mimeType, LAYOUTS[layout].assetRoot(asset));
     const content = body.base64Encoded ? Buffer.from(body.body, 'base64') : Buffer.from(body.body, 'utf8');
     bytes += content.length;
 
@@ -338,6 +381,9 @@ export async function captureClone(session, {
     dir: outDir,
     entry,
     holder,
+    layout,
+    replacements,
+    pageOrigin,
     files: written.length + 1,
     bytes,
     reused,

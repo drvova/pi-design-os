@@ -670,3 +670,260 @@ export const SNAPSHOT = `
   return { html: '<!doctype html>\\n' + markup, notes: notes };
 })();
 `;
+
+/**
+ * Slice detection, run before the page is serialized.
+ *
+ * A cloned page has no business domains, so slices are inferred from what the
+ * markup actually states. Landmarks are widgets, explicit interactive roles are
+ * features, repeated sibling subtrees are entities, and leaf controls are shared
+ * primitives. Nothing here guesses from appearance: every rule keys off a tag,
+ * a role, or a repetition the DOM itself contains.
+ *
+ * Each root is marked with an attribute so the CSS domain can resolve matched
+ * rules against the exact nodes afterwards, and so the boundary stays visible in
+ * the cloned markup.
+ */
+export const SLICES = `
+(function () {
+  var MARKER = 'data-design-os-slice';
+  var WIDGET_TAGS = { HEADER: 'site-header', FOOTER: 'site-footer', NAV: 'nav', ASIDE: 'sidebar' };
+  var FEATURE_TAGS = { FORM: 'form', DIALOG: 'dialog', DETAILS: 'disclosure' };
+  var FEATURE_ROLES = { dialog: 'dialog', menu: 'menu', tablist: 'tabs', switch: 'switch', search: 'search' };
+  var PRIMITIVE_TAGS = { BUTTON: 'button', INPUT: 'input', SELECT: 'select', TEXTAREA: 'textarea', SVG: 'icon' };
+
+  var found = [];
+  var claimed = new Set();
+  var used = Object.create(null);
+
+  // A utility class describes appearance, not identity. On a Tailwind site every
+  // element carries a dozen, and naming a component after one produces
+  // widgets/mb-32 for the page header.
+  var UTILITY_WORD = /^(flex|grid|block|inline|inline-block|contents|hidden|relative|absolute|fixed|sticky|static|group|peer|container|truncate|italic|bold|underline|uppercase|lowercase|capitalize|rounded|border|shadow|overflow|isolate|transform|transition|antialiased|cursor|select|pointer|invisible|visible|sr-only|not-prose|prose)([-_].*)?$/;
+  var UTILITY_SHAPE = /^-?[a-z]{1,8}-(\\d|\\[|full$|none$|auto$|px$|screen$|min$|max$|xs$|sm$|md$|lg$|xl$|\\dxl$)/;
+
+  // A shape test separates mb-32 from post-card but not items-center from it,
+  // because both are two words. What does separate them is that the first word
+  // of a utility names a css property, and that set is finite.
+  var UTILITY_PREFIX = new Set(
+    ('items justify content self place order basis grow shrink flex grid col row gap space ' +
+     'w h size min max aspect columns p px py pt pb pl pr m mx my mt mb ml mr inset top right bottom left ' +
+     'bg text font leading tracking whitespace indent align decoration underline line list ' +
+     'border rounded divide outline ring shadow opacity mix blend ' +
+     'translate rotate scale skew origin transform transition duration delay ease animate will ' +
+     'overflow overscroll object float clear isolation z ' +
+     'fill stroke backdrop blur brightness contrast grayscale saturate sepia invert ' +
+     'cursor pointer resize scroll snap touch select caret accent appearance ' +
+     'sr not table caption border-spacing').split(' '),
+  );
+
+  function isUtility(name) {
+    if (name.indexOf(':') !== -1 || UTILITY_WORD.test(name) || UTILITY_SHAPE.test(name)) return true;
+    return UTILITY_PREFIX.has(name.split('-')[0]);
+  }
+
+  // Framework-generated ids change between renders, so a slice named after one
+  // would not survive a second capture of the same page.
+  var GENERATED_ID = /^(radix-|headlessui-|react-aria|mui-|rc-|:r|_|\\d)|^r[a-z0-9]{1,4}$|^[a-z]{1,2}$/i;
+
+  function kebab(text) {
+    return String(text)
+      .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40);
+  }
+
+  // A CSS-module class looks like PostCard_root__a1b2. The author's component
+  // name is the first part; what follows the underscore names the element
+  // inside it, so PostCard_root and PostCard_title are one component.
+  function moduleName(element) {
+    var classes = String(element.className && element.className.baseVal !== undefined ? element.className.baseVal : element.className || '').split(/\\s+/).filter(Boolean);
+    // An element carrying this many classes is being styled by utilities, and
+    // picking one of them names the component after an accident of layout.
+    var utilityHeavy = classes.length >= 5;
+    for (var i = 0; i < classes.length; i += 1) {
+      var match = /^([A-Za-z][A-Za-z0-9]*)(?:_[A-Za-z0-9]+)?__[A-Za-z0-9_-]{4,}$/.exec(classes[i]);
+      if (match) return match[1];
+    }
+    for (var c = 0; c < classes.length && !utilityHeavy; c += 1) {
+      var plain = classes[c];
+      if (plain.length < 4 || plain.length > 28) continue;
+      if (!/^[a-z][a-z0-9-]*$/.test(plain) || isUtility(plain)) continue;
+      // A name worth keeping reads as a name: two or more words, or one long one.
+      if (plain.indexOf('-') !== -1 || plain.length >= 8) return plain;
+    }
+    return null;
+  }
+
+  // An id or a label names the instance, not the kind, so the tag is appended
+  // to say what the thing is: subscribe becomes subscribe-form. A class is
+  // already the author's component name and is left alone.
+  function withKind(name, element) {
+    var tag = element.tagName.toLowerCase();
+    return name.indexOf(tag) === -1 ? kebab(name + '-' + tag) : name;
+  }
+
+  // What a block says about itself, when nothing names it. Only ever used for
+  // singletons: the text inside a repeated unit differs per instance, so naming
+  // a card component after the first card's title would be wrong.
+  function contentName(element) {
+    // Only a heading the block owns. A descendant's aria-label names that
+    // descendant: borrowing it turns a header wrapping a nav into primary-header.
+    var heading = element.querySelector('h1,h2,h3,h4,h5,h6,figcaption,summary,legend');
+    if (!heading) return null;
+    var text = (heading.textContent || '').trim();
+    return text && text.length <= 40 ? kebab(text) : null;
+  }
+
+  function nameFor(element, fallback, useContent) {
+    if (element.id && !GENERATED_ID.test(element.id)) {
+      return { name: withKind(kebab(element.id), element), namedBy: 'id' };
+    }
+    var label = element.getAttribute('aria-label');
+    if (label) return { name: withKind(kebab(label), element), namedBy: 'aria-label' };
+    var module = moduleName(element);
+    if (module) return { name: kebab(module), namedBy: 'class' };
+    if (useContent) {
+      var described = contentName(element);
+      if (described) return { name: withKind(described, element), namedBy: 'content' };
+    }
+    return { name: kebab(fallback), namedBy: 'tag' };
+  }
+
+  function unique(layer, name) {
+    var key = layer + '/' + (name || 'unnamed');
+    if (!used[key]) { used[key] = 1; return name || 'unnamed'; }
+    used[key] += 1;
+    return (name || 'unnamed') + '-' + used[key];
+  }
+
+  // Tag, classes and immediate child shape. Two siblings that agree on all three
+  // are the same component rendered twice.
+  function signature(element) {
+    var classes = String(element.getAttribute('class') || '').split(/\\s+/).filter(Boolean).sort().join('.');
+    var shape = [];
+    for (var i = 0; i < element.children.length; i += 1) shape.push(element.children[i].tagName);
+    return element.tagName + '|' + classes + '|' + shape.join(',');
+  }
+
+  function claim(element, layer, name, namedBy, instances) {
+    if (claimed.has(element)) return;
+    claimed.add(element);
+    var base = name || 'unnamed';
+    var slug = unique(layer, base);
+    element.setAttribute(MARKER, layer + '/' + slug);
+    found.push({
+      layer: layer,
+      base: base,
+      name: slug,
+      namedBy: namedBy,
+      tag: element.tagName.toLowerCase(),
+      instances: instances || 1,
+      descendants: element.querySelectorAll('*').length,
+      signature: signature(element),
+      marker: layer + '/' + slug
+    });
+  }
+
+  var all = document.body ? document.body.querySelectorAll('*') : [];
+
+  // Widgets: page landmarks, plus custom elements substantial enough to be one.
+  for (var w = 0; w < all.length; w += 1) {
+    var node = all[w];
+    var landmark = WIDGET_TAGS[node.tagName];
+    if (landmark) {
+      // A landmark directly under body is the page's own, and its role is a
+      // better name than anything inside it. One nested in an article is a
+      // component, where a heading says far more than the tag does.
+      var named = nameFor(node, landmark, node.parentElement !== document.body);
+      claim(node, 'widgets', named.namedBy === 'tag' ? landmark : named.name, named.namedBy);
+    } else if (node.tagName.indexOf('-') !== -1 && node.querySelectorAll('*').length >= 3) {
+      claim(node, 'widgets', kebab(node.tagName), 'custom-element');
+    }
+  }
+
+  // Features: interaction the markup declares outright.
+  for (var f = 0; f < all.length; f += 1) {
+    var candidate = all[f];
+    var role = String(candidate.getAttribute('role') || '').toLowerCase();
+    var kind = FEATURE_TAGS[candidate.tagName] || FEATURE_ROLES[role];
+    if (!kind) continue;
+    var featureName = nameFor(candidate, kind, true);
+    claim(candidate, 'features', featureName.name || kind, featureName.namedBy);
+  }
+
+  // Entities: a subtree the page repeats among siblings is a rendered unit.
+  var parents = new Set();
+  for (var p = 0; p < all.length; p += 1) if (all[p].parentElement) parents.add(all[p].parentElement);
+  parents.forEach(function (parent) {
+    var groups = Object.create(null);
+    for (var c = 0; c < parent.children.length; c += 1) {
+      var child = parent.children[c];
+      // Three descendants is the line between a repeated component and a pair
+      // of styled spans, which a content page produces by the dozen.
+      if (child.querySelectorAll('*').length < 3) continue;
+      var key = signature(child);
+      (groups[key] = groups[key] || []).push(child);
+    }
+    Object.keys(groups).forEach(function (key) {
+      var group = groups[key];
+      if (group.length < 2) return;
+      var exemplar = group[0];
+      if (claimed.has(exemplar)) return;
+      var entityName = nameFor(exemplar, exemplar.tagName + '-item');
+      // An unnameable repetition is a layout accident, not a component.
+      if (entityName.namedBy === 'tag' && exemplar.querySelectorAll('*').length < 6) return;
+      claim(exemplar, 'entities', entityName.name, entityName.namedBy, group.length);
+    });
+  });
+
+  // Shared primitives: one folder per distinct leaf control, not per occurrence.
+  var primitives = Object.create(null);
+  for (var s = 0; s < all.length; s += 1) {
+    var leaf = all[s];
+    var primitive = PRIMITIVE_TAGS[leaf.tagName] || (leaf.getAttribute('role') === 'button' ? 'button' : null);
+    if (!primitive || claimed.has(leaf)) continue;
+    var key = primitive + '|' + signature(leaf);
+    if (!primitives[key]) primitives[key] = [];
+    primitives[key].push(leaf);
+  }
+  Object.keys(primitives).forEach(function (key) {
+    var group = primitives[key];
+    var exemplar = group[0];
+    // A primitive is named by what it is for, never by how it is styled: its
+    // label or its id, and otherwise just the control it is.
+    var kind = PRIMITIVE_TAGS[exemplar.tagName] || 'control';
+    var label = exemplar.getAttribute('aria-label');
+    var primitiveName = { name: kebab(kind), namedBy: 'tag' };
+    if (exemplar.id && !GENERATED_ID.test(exemplar.id)) {
+      primitiveName = { name: withKind(kebab(exemplar.id), exemplar), namedBy: 'id' };
+    } else if (label) {
+      primitiveName = { name: withKind(kebab(label), exemplar), namedBy: 'aria-label' };
+    }
+    claim(exemplar, 'shared', primitiveName.name, primitiveName.namedBy, group.length);
+  });
+
+  // The document shell is not decoration. A theme class sits on <html> and a
+  // font-loader class sits on <body>; a preview that invents its own bare shell
+  // renders every component in the fallback serif.
+  function shellOf(element) {
+    var attributes = {};
+    for (var a = 0; a < element.attributes.length; a += 1) {
+      attributes[element.attributes[a].name] = element.attributes[a].value;
+    }
+    return attributes;
+  }
+
+  return {
+    shell: { html: shellOf(document.documentElement), body: shellOf(document.body) },
+    slices: found.map(function (slice) {
+      var element = document.querySelector('[' + MARKER + '="' + slice.marker + '"]');
+      slice.html = element ? element.outerHTML : '';
+      slice.text = element ? (element.textContent || '').trim().slice(0, 80) : '';
+      return slice;
+    }),
+  };
+})();
+`;

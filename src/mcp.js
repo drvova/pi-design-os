@@ -91,6 +91,15 @@ const TOOLS = [
           maximum: 200,
           default: 1,
         },
+        layout: {
+          type: 'string',
+          enum: ['flat', 'fsd'],
+          description:
+            'flat mirrors the origin under one assets folder. fsd emits a Feature-Sliced Design tree: routes as pages slices, ' +
+            'extracted components under widgets, features, entities and shared/ui, each with only the CSS that matched it, ' +
+            'plus app/styles split into tokens, fonts and global, a manifest and a README.',
+          default: 'flat',
+        },
         budget: {
           type: 'integer',
           description: 'Asset size budget in MB. Stylesheets and fonts are saved first, scripts last.',
